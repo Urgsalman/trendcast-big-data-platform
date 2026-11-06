@@ -83,3 +83,34 @@ def test_extra_field_is_rejected():
 
     with pytest.raises(ValidationError):
         validate_event(event)
+
+def test_invalid_source_is_rejected():
+    event = {
+        "event_id": "test",
+        "source": "unknown_source",
+        "project": "en.wikipedia",
+        "page_title": "Python",
+        "timestamp": "2026-10-01T00:00:00Z",
+        "granularity": "daily",
+        "views": 1000,
+        "schema_version": "1.0",
+    }
+
+    with pytest.raises(ValidationError):
+        validate_event(event)
+
+
+def test_invalid_granularity_is_rejected():
+    event = {
+        "event_id": "test",
+        "source": "wikimedia_pageviews",
+        "project": "en.wikipedia",
+        "page_title": "Python",
+        "timestamp": "2026-10-01T00:00:00Z",
+        "granularity": "monthly",
+        "views": 1000,
+        "schema_version": "1.0",
+    }
+
+    with pytest.raises(ValidationError):
+        validate_event(event)

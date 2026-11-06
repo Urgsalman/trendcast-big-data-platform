@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -6,14 +7,14 @@ from pydantic import BaseModel, ConfigDict, Field
 class PageviewEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    event_id: str
-    source: str
-    project: str
-    page_title: str
+    event_id: str = Field(min_length=1)
+    source: Literal["wikimedia_pageviews"]
+    project: str = Field(min_length=1)
+    page_title: str = Field(min_length=1)
     timestamp: datetime
-    granularity: str
+    granularity: Literal["hourly", "daily"]
     views: int = Field(ge=0)
-    schema_version: str
+    schema_version: Literal["1.0"]
 
 
 def validate_event(event: dict) -> dict:
