@@ -1,3 +1,4 @@
+
 from unittest.mock import Mock, patch
 
 import pytest
@@ -6,15 +7,25 @@ import requests
 from ingestion.collectors.wikimedia_collector import collect_pageviews
 
 
-@patch("ingestion.collectors.wikimedia_collector.requests.get")
+@patch(
+    "ingestion.collectors.wikimedia_collector.requests.Session.get"
+)
 def test_collect_pageviews_returns_valid_events(mock_get):
     mock_response = Mock()
+
     mock_response.json.return_value = {
         "items": [
-            {"timestamp": "2026100100", "views": 5020},
-            {"timestamp": "2026100200", "views": 5325},
+            {
+                "timestamp": "2026100100",
+                "views": 5020,
+            },
+            {
+                "timestamp": "2026100200",
+                "views": 5325,
+            },
         ]
     }
+
     mock_get.return_value = mock_response
 
     events = collect_pageviews(
@@ -30,11 +41,16 @@ def test_collect_pageviews_returns_valid_events(mock_get):
     assert events[0]["event_id"].endswith("2026100100")
     assert events[0]["timestamp"] == "2026-10-01T00:00:00+00:00"
 
+    mock_get.assert_called_once()
 
-@patch("ingestion.collectors.wikimedia_collector.requests.get")
+
+@patch(
+    "ingestion.collectors.wikimedia_collector.requests.Session.get"
+)
 def test_collect_pageviews_returns_empty_list(mock_get):
     mock_response = Mock()
     mock_response.json.return_value = {"items": []}
+
     mock_get.return_value = mock_response
 
     events = collect_pageviews(
@@ -44,17 +60,42 @@ def test_collect_pageviews_returns_empty_list(mock_get):
     )
 
     assert events == []
+    mock_get.assert_called_once()
 
 
-@patch("ingestion.collectors.wikimedia_collector.requests.get")
+@patch(
+    "ingestion.collectors.wikimedia_collector.requests.Session.get"
+)
 def test_collect_pageviews_raises_http_error(mock_get):
     mock_response = Mock()
-    mock_response.raise_for_status.side_effect = requests.HTTPError("HTTP 500")
+
+    mock_response.raise_for_status.side_effect = requests.HTTPError(
+        "HTTP 500"
+    )
+
     mock_get.return_value = mock_response
 
     with pytest.raises(requests.HTTPError):
         collect_pageviews(
             page_title="Python_(programming_language)",
             start="2026100100",
+            end="2026100200",
+        )
+
+
+def test_collect_pageviews_rejects_invalid_start_date():
+    with pytest.raises(ValueError):
+        collect_pageviews(
+            page_title="Python_(programming_language)",
+            start="invalid-date",
+            end="2026100200",
+        )
+
+
+def test_collect_pageviews_rejects_invalid_date_range():
+    with pytest.raises(ValueError):
+        collect_pageviews(
+            page_title="Python_(programming_language)",
+            start="2026100300",
             end="2026100200",
         )
