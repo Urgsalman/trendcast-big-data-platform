@@ -1,0 +1,43 @@
+{
+  "type": "object",
+  "required": [
+    "event_id",
+    "source",
+    "project",
+    "page_title",
+    "timestamp",
+    "granularity",
+    "views",
+    "schema_version"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "string",
+      "const": "wikimedia_pageviews"
+    },
+    "project": {
+      "type": "string"
+    },
+    "page_title": {
+      "type": "string"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "granularity": {
+      "type": "string",
+      "enum": ["hourly", "daily"]
+    },
+    "views": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "schema_version": {
+      "type": "string"
+    }
+  }
+}
