@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article"
 
 HEADERS = {
-    "User-Agent": "TrendCast-BigData-StudentProject/1.0 (contact: soulaimaine.ch@gmail.com)"
+    "User-Agent": "TrendCast-BigData-StudentProject/1.0 (contact: nou.soulaimane@gmail.com)"
 }
 
 PAGES = [
