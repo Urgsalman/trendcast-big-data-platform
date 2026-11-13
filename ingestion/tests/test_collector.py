@@ -36,8 +36,8 @@ def test_collect_pageviews_returns_valid_events(mock_get):
 
     assert len(events) == 2
     assert events[0]["source"] == "wikimedia_pageviews"
-    assert events[0]["views"] == 5020
-    assert events[0]["page_title"] == "Python_(programming_language)"
+    assert events[0]["payload"]["views"] == 5020
+    assert (events[0]["payload"]["page_title"]== "Python_(programming_language)")
     assert events[0]["event_id"].endswith("2026100100")
     assert events[0]["timestamp"] == "2026-10-01T00:00:00+00:00"
 

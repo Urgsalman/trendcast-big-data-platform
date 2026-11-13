@@ -11,7 +11,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
-class PageviewProducer:
+class KafkaEventProducer:
     def __init__(
         self,
         bootstrap_servers: str | None = None,
@@ -24,13 +24,14 @@ class PageviewProducer:
 
         self.topic = topic or os.getenv(
             "KAFKA_TOPIC",
-            "pageviews.validated",
+            "trendcast.events.validated",
         )
 
         self.producer = KafkaProducer(
             bootstrap_servers=self.bootstrap_servers,
             value_serializer=lambda value: json.dumps(
-                value
+                value,
+                ensure_ascii=False,
             ).encode("utf-8"),
             key_serializer=lambda key: key.encode("utf-8"),
             acks="all",
@@ -73,5 +74,4 @@ class PageviewProducer:
         if self.producer is not None:
             self.producer.flush(timeout=30)
             self.producer.close(timeout=30)
-
             logger.info("Kafka producer connection closed")
