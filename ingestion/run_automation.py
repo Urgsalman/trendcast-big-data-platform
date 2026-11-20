@@ -81,16 +81,22 @@ class AutomationRunner:
             ]
         )
         self.failed = False
+        self.transport_failed = False
         self.published = 0
         self.skipped = 0
 
     def publish(self, event: dict, slot: str = "") -> None:
+        if self.transport_failed:
+            self.failed = True
+            return
+        transport_started = False
         try:
             validated = validate_event(event)
             key = publication_key(self.namespace, validated, slot)
             if self.state.contains(key):
                 self.skipped += 1
                 return
+            transport_started = True
             if self.producer is None:
                 self.producer = self.producer_factory()
             self.producer.publish(validated)
@@ -98,6 +104,7 @@ class AutomationRunner:
             self.published += 1
         except Exception:
             self.failed = True
+            self.transport_failed = transport_started
             logger.exception(
                 "Publication not confirmed: event=%s", event.get("event_id")
             )
@@ -144,6 +151,8 @@ class AutomationRunner:
                         )
                         for event in events:
                             self.publish(event)
+                            if self.transport_failed:
+                                return
                         # An empty/partial API result does not advance a watermark.
                         day = lower
                         while day <= upper:
@@ -159,6 +168,7 @@ class AutomationRunner:
 
     def run_source(self, source: str, now: datetime) -> bool:
         self.failed = False
+        self.transport_failed = False
         self.published = 0
         self.skipped = 0
         try:

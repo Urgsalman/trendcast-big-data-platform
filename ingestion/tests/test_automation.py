@@ -92,6 +92,7 @@ def test_publication_failure_remains_retryable(state):
     runner.publish(pageview())
     assert runner.failed
     producer.publish.side_effect = None
+    runner = automation.AutomationRunner(state, lambda: producer)
     runner.publish(pageview())
     assert runner.published == 1
     assert producer.publish.call_count == 2
@@ -231,3 +232,13 @@ def test_scheduler_actually_triggers_all_three_sources(monkeypatch, tmp_path):
         scheduler.shutdown(wait=True)
         thread.join(timeout=5)
     assert not thread.is_alive()
+
+
+def test_broker_outage_does_not_repeat_bootstrap_for_every_event(state):
+    factory = Mock(side_effect=RuntimeError("broker unavailable"))
+    runner = automation.AutomationRunner(state, factory)
+    runner.publish(pageview(day="2026111700"))
+    runner.publish(pageview(day="2026111800"))
+    assert runner.failed
+    assert runner.published == 0
+    factory.assert_called_once()
