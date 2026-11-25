@@ -4,6 +4,17 @@ Ce module prédit les vues du prochain jour calendaire pour un panel de pages te
 
 [Rapport expérimental et résultats de la version hala-20261125-v1](RESULTATS.md)
 
+```mermaid
+flowchart LR
+    Gold[(Exports Gold en HDFS)] --> Profile[Profilage Spark SQL]
+    Gold --> Preparation[Préparation temporelle]
+    Preparation --> Dataset[(Parquet supervisé versionné)]
+    Dataset --> Training[Comparaison et tuning Spark ML]
+    Training --> Model[(PipelineModel et manifeste)]
+    Model --> Forecast[Chargement et test de parité]
+    Preparation -. Transformations partagées .-> Forecast
+```
+
 ## Données et périmètre
 
 L’entrée ML est `/trendcast/analytics/ml_dataset`. Le schéma Gold fournit `project`, `page_title`, `event_date`, `views` et `kafka_timestamp`. L’identifiant analytique est `(project, page_title, event_date)`, où `event_date` désigne un jour UTC. Gold n’expose ni la provenance de chaque ligne, ni l’heure de sa première disponibilité, ni les coordonnées Kafka complètes. Les timestamps Kafka servent au diagnostic des imports.
@@ -95,6 +106,21 @@ Conserver jusqu’à 28 jours d’historique. Les pages hors panel, les pages sa
 
 La sortie est `project:string`, `page_title:string`, `prediction_date:date`, `predicted_views:double`, `model_version:string` et `prediction_timestamp:timestamp`. L’ordre exact du vecteur est dans `selected.features` du manifeste. Les valeurs manquantes sont gérées par le prétraitement sauvegardé et par la règle d’éligibilité du module temporel.
 
+```python
+from analytics.ml.predict_sample import forecast_for_reference, load_forecaster
+
+spark.conf.set("spark.sql.session.timeZone", "UTC")
+pipeline, manifest = load_forecaster(spark, model_uri)
+predictions = forecast_for_reference(
+    spark,
+    pipeline,
+    manifest,
+    history,
+    reference_date,
+    prediction_timestamp=decision_time_utc,
+)
+```
+
 Pour transférer le modèle, un membre de l’équipe peut exporter le répertoire HDFS versionné `pipeline/` et son `manifest/` avec `hdfs dfs -get`, puis les transférer via un canal privé convenu. Sur l’autre cluster, importer les deux sous le même numéro de version avec `hdfs dfs -put` vers un répertoire neuf et charger son URI. Une réexécution des jobs avec le même export Gold constitue l’autre mode de livraison. Le test de parité sur le cluster d’origine utilise aussi les prédictions du test et l’entrée Gold référencées par le manifeste.
 
 ## Questions pour la soutenance
@@ -104,5 +130,6 @@ Pour transférer le modèle, un membre de l’équipe peut exporter le répertoi
 - **Pourquoi couper sur la date cible ?** Cela attribue chaque jour à un seul groupe et empêche qu’un label du début de validation soit utilisé en entraînement.
 - **Pourquoi deux baselines ?** La persistance mesure la valeur de la dernière observation, et la baseline hebdomadaire mesure une saisonnalité simple. Elles donnent des références concrètes aux trois techniques.
 - **Pourquoi expliquer MAE et RMSE ensemble ?** La MAE représente l’erreur absolue moyenne. La RMSE donne davantage de poids aux grosses erreurs, par exemple un pic de visites.
+- **Pourquoi conserver l’arbre quand l’hebdomadaire a la meilleure MAE du test ?** L’arbre a été retenu sur validation avant d’observer les scores du test. Sur ce dernier, l’hebdomadaire présente le meilleur écart absolu moyen et l’arbre la meilleure RMSE. Les deux résultats éclairent le choix du service selon le coût des erreurs.
 - **Pourquoi séparer le module temporel du pipeline sauvegardé ?** Les features nécessitent un historique daté et ses réceptions. Le modèle sauvegarde ensuite les transformations apprises et la régression.
 - **Un bon score permet-il de prédire un nouveau titre ?** L’évaluation suit les mêmes 20 séries au fil du temps. L’admission de nouveaux titres demanderait de mesurer leur couverture et de refaire un test correspondant à cet objectif.

@@ -11,7 +11,7 @@ matplotlib.use("Agg")
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import pandas as pd
-from matplotlib.ticker import FuncFormatter
+from matplotlib.ticker import FuncFormatter, MaxNLocator
 
 COLORS = {"ink": "#17273a", "blue": "#126982", "amber": "#a85124", "grid": "#d9e1e7"}
 NAMES = {
@@ -35,6 +35,7 @@ def dates(axis):
             locator,
             formats=["%Y", "%m/%Y", "%d/%m", "%H:%M", "%H:%M", "%S"],
             zero_formats=["", "%Y", "%m/%Y", "%d/%m", "%H:%M", "%H:%M"],
+            show_offset=False,
         )
     )
 
@@ -42,6 +43,13 @@ def dates(axis):
 def save(fig, path):
     fig.savefig(path, metadata={"Date": None})
     plt.close(fig)
+    if path.suffix == ".svg":
+        lines = path.read_text(encoding="utf-8").splitlines()
+        path.write_text(
+            "\n".join(line.rstrip() for line in lines) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
 
 
 def profile_figure(profile, gold_daily, panel_daily, period, output):
@@ -127,6 +135,7 @@ def comparison_figure(metrics, output):
             axis.invert_yaxis()
             axis.set(title=f"{title} · {metric.upper()}", xlabel="Erreur en vues")
             axis.xaxis.set_major_formatter(FuncFormatter(number))
+            axis.xaxis.set_major_locator(MaxNLocator(nbins=6))
     save(fig, output)
 
 
@@ -163,7 +172,7 @@ def predictions_figure(values, metrics, page, output):
     errors = values.predicted_views - values.target_next_day_views
     axes[1].hist(errors, bins=45, color=COLORS["blue"])
     axes[1].axvline(0, color=COLORS["ink"], lw=1)
-    axes[1].set(xlabel="Prédiction − réel (vues)", ylabel="Observations")
+    axes[1].set(xlabel="Prédiction − réel (vues)", ylabel="Observations", yscale="log")
     axes[1].xaxis.set_major_formatter(FuncFormatter(number))
     if importance:
         ranked = sorted(importance.items(), key=lambda item: item[1])[-10:]
