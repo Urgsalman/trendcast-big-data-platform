@@ -89,13 +89,15 @@ def forecast_for_reference(
     )
 
 
-def verify_saved_model(spark, model_uri):
+def verify_saved_model(spark, model_uri, *, gold_uri=None, reference_predictions=None):
     model, manifest = load_forecaster(spark, model_uri)
     policy = manifest["dataset_manifest"]
-    stored = spark.read.parquet(f"{model_uri}/test_predictions")
+    stored = spark.read.parquet(
+        reference_predictions or f"{model_uri}/test_predictions"
+    )
     target_day = stored.agg(F.max("prediction_date").alias("day")).first().day
     reference = target_day - timedelta(days=1)
-    gold = spark.read.parquet(policy["gold"]).where(
+    gold = spark.read.parquet(gold_uri or policy["gold"]).where(
         F.col("event_date").between(policy["first_input_day"], policy["last_input_day"])
     )
     # Replay the backtest policy. Production uses recorded receipt timestamps.
@@ -133,7 +135,12 @@ def verify_saved_model(spark, model_uri):
             raise RuntimeError(f"Échec de la parité après rechargement : {stats}")
         print_manifest(
             "WIKIMEDIA_RELOAD",
-            {"model_version": manifest["version"], "target_date": target_day, **stats},
+            {
+                "model_version": manifest["version"],
+                "model_uri": model_uri,
+                "target_date": target_day,
+                **stats,
+            },
         )
         predictions.orderBy(*SERIES).show(5, truncate=False)
     finally:
@@ -143,10 +150,37 @@ def verify_saved_model(spark, model_uri):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True)
+    parser.add_argument("--load-only", action="store_true")
+    parser.add_argument(
+        "--gold", help="Entrée Gold de référence pour le test de parité"
+    )
+    parser.add_argument(
+        "--reference-predictions", help="Prédictions de test déjà produites"
+    )
     args = parser.parse_args()
+    if args.load_only and (args.gold or args.reference_predictions):
+        parser.error("--load-only ne requiert ni Gold ni prédictions de référence")
+    model_uri = args.model.rstrip("/")
     spark = start_spark("TrendCast Wikimedia - rechargement et parité")
     try:
-        verify_saved_model(spark, args.model.rstrip("/"))
+        if args.load_only:
+            model, manifest = load_forecaster(spark, model_uri)
+            print_manifest(
+                "WIKIMEDIA_MODEL_LOADED",
+                {
+                    "model_version": manifest["version"],
+                    "model_uri": model_uri,
+                    "stages": [type(stage).__name__ for stage in model.stages],
+                    "features": manifest["selected"]["features"],
+                },
+            )
+        else:
+            verify_saved_model(
+                spark,
+                model_uri,
+                gold_uri=args.gold,
+                reference_predictions=args.reference_predictions,
+            )
     finally:
         spark.stop()
 

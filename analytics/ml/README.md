@@ -4,6 +4,8 @@ Ce module prédit les vues du prochain jour calendaire pour un panel de pages te
 
 [Rapport expérimental et résultats de la version hala-20261125-v1](RESULTATS.md)
 
+[Passation à Nadir, import et contrôle de l’archive du modèle](PASSATION_NADIR.md)
+
 ```mermaid
 flowchart LR
     Gold[(Exports Gold en HDFS)] --> Profile[Profilage Spark SQL]

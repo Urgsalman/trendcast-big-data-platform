@@ -63,7 +63,9 @@ Ces deux dates décrivent des snapshots de taille différente. Le nombre de comm
 | Références labellisées sans observation historique éligible | 40 |
 | **Dataset supervisé** | **7 260** |
 
-Le dernier jour observé fournit des labels à la veille. Il ne peut pas devenir une référence supplémentaire sans un label extérieur à la période approuvée. Les deux premiers jours de référence ont une cible, mais aucune observation compatible avec le délai de deux jours dans la fenêtre du panel.
+Le filtre retient `en.wikipedia`, les 20 titres configurés et les dates du **2025-11-23 au 2026-11-23 inclus**. Il écarte **454 736 lignes** hors périmètre. Les 7 320 lignes restantes sont valides et sans doublon.
+
+L’écart de **60 lignes** entre le panel et le dataset supervisé correspond à deux cas précis. Le **2026-11-23**, les 20 observations servent de labels aux références du 22. Elles ne deviennent pas elles-mêmes des références car l’export s’arrête avant le jour cible du 24. Pour les références du **2025-11-23 et du 2025-11-24**, soit **40 lignes**, la cible existe. L’historique éligible s’arrête à `t−2`, avant le début de la période autorisée. À partir de la référence du 25 novembre, le premier jour observé, le 23, devient éligible.
 
 ![Quantiles des vues, couverture quotidienne de Gold et total quotidien du panel](figures/exploration.svg)
 
@@ -76,6 +78,19 @@ Le dernier jour observé fournit des labels à la veille. Il ne peut pas devenir
 | Test final | 2026-09-30 | 2026-11-23 | 55 | 1 100 |
 
 Les vingt séries sont présentes chaque jour éligible. La persistance et la référence hebdomadaire couvrent toutes les lignes de validation et de test. L’hebdomadaire utilise la persistance sur les 80 premières lignes d’entraînement qui n’ont pas encore de valeur à la date cible moins sept jours.
+
+## Variables de l’arbre retenu
+
+La décision a lieu avant le début de `t+1` en UTC. Le backtest autorise les observations de `t−28` à `t−2` inclus, avec un délai simulé de deux jours. En production, l’observation doit également avoir été reçue strictement avant la décision. L’heure de la première réception manque dans Gold. Elle doit être enregistrée par le système qui alimente l’inférence.
+
+| Ordre dans le vecteur | Variable | Définition |
+|---:|---|---|
+| 1 | `latest_views` | Vues de la dernière date éligible pour la même page et le même projet |
+| 2 | `latest_age` | Nombre de jours entre la date de cette observation et la référence `t` |
+| 3 | `weekday_sin` | Sinus de `2π × (jour_de_semaine(t+1) − 1) / 7` |
+| 4 | `weekday_cos` | Cosinus du même angle |
+
+Le jour de semaine suit la convention Spark, du dimanche 1 au samedi 7. Les deux termes calendaires sont connus dès la décision. L’arbre utilise les quatre entrées dans cet ordre avec `VectorAssembler`. Voir le [contrat d’inférence et de disponibilité](PASSATION_NADIR.md).
 
 ## Comparaison sur validation
 
@@ -103,7 +118,7 @@ La régression linéaire de départ utilise `regParam=0`, `elasticNetParam=0` et
 | **Essai 2 retenu** | **7** | **5** | **32** | **2 360,07** | **12 944,70** | **2,577** |
 | Essai 3 | 5 | 15 | 48 | 2 635,01 | 13 278,12 | 1,914 |
 
-Le réglage réduit la MAE de validation de **5,43 %**. La RMSE reste proche de celle de l’arbre initial. Une fois les paramètres figés, le job évalue les baselines, le meilleur jeu de variables de chacune des trois techniques et l’arbre réglé sur le test indépendant.
+Le réglage réduit la MAE de validation de **5,43 %**. La RMSE reste proche de celle de l’arbre initial. Les modèles et les transformations apprises ont été ajustés sur l’entraînement. La validation décide du jeu de variables, de la technique et des hyperparamètres. Avant ce choix, le job relève uniquement les dates et volumes du test. Ses labels servent au calcul des scores et au diagnostic après sélection. Le test final n’a servi à choisir aucun modèle ni hyperparamètre.
 
 ## Test final
 
@@ -129,7 +144,7 @@ L’arbre retenu réduit la MAE de **23,15 %** et la RMSE de **25,11 %** face à
 
 L’erreur absolue médiane est de **234,52 vues**, et le 95e percentile atteint **7 251,52 vues**. Une grande partie du risque se concentre dans les séries à fort trafic et les pics. Par exemple, Linux atteint **177 023 vues** le 23 novembre 2026, pour une prédiction de **3 073,62** et une dernière observation éligible à **2 758 vues**. ChatGPT affiche une MAE de **23 896,20** sur 55 prédictions, et NVIDIA **48,68** sur le même nombre de prédictions. Le modèle repose surtout sur la dernière observation. Un pic sans signal éligible dans l’historique reste difficile à anticiper.
 
-Les dernières vues éligibles représentent **95,34 %** de l’importance dans l’arbre, le sinus hebdomadaire **3,36 %** et son cosinus **1,30 %**. L’âge de la dernière observation a une importance nulle sur ce panel où l’historique est dense. Les résultats décrivent une généralisation aux dates futures du même panel sur la période étudiée. Une disponibilité réelle plus irrégulière, de nouvelles pages ou d’autres périodes nécessitent une évaluation dédiée.
+Les dernières vues éligibles représentent **95,34 %** de l’importance dans l’arbre, le sinus hebdomadaire **3,36 %** et son cosinus **1,30 %**. L’âge de la dernière observation a une importance nulle sur ce panel où l’historique est dense. Les résultats décrivent une généralisation aux dates futures du même panel sur la période étudiée. Les pages hors panel et les pages sans historique éligible ne reçoivent aucun score. Une disponibilité réelle plus irrégulière, de nouvelles pages ou d’autres périodes nécessitent une évaluation dédiée.
 
 ![Vues de ChatGPT réelles et prédites, histogramme des erreurs et importance des variables](figures/predictions.svg)
 
@@ -137,6 +152,6 @@ Les dernières vues éligibles représentent **95,34 %** de l’importance dans 
 
 - **Dataset supervisé** à `hdfs://namenode:9000/trendcast/analytics/wikimedia_supervised/hala-20261125-v1`. Le dossier contient le Parquet et son manifeste de préparation.
 - **Modèle** à `hdfs://namenode:9000/trendcast/models/wikimedia_next_day_views/hala-20261125-v1`. Le `PipelineModel` sauvegarde l’assemblage et l’arbre. Le vecteur a pour ordre `latest_views`, `latest_age`, `weekday_sin`, `weekday_cos`. Le manifeste conserve l’empreinte de l’archive, les versions logicielles, les dates, les paramètres et les mesures.
-- **Rechargement** dans une nouvelle application Spark. Sur le 23 novembre 2026, **20 prédictions sur 20** sont finies et reproduisent les prédictions du test sauvegardé avec un **écart absolu maximal de 0**. Le rejeu utilise la règle de disponibilité du backtest. Les horodatages réels de disponibilité restent à instrumenter côté inférence.
+- **Rechargement** dans de nouvelles applications Spark, depuis le modèle d’origine puis depuis les fichiers réimportés du ZIP dans un autre chemin HDFS. Sur le 23 novembre 2026, **20 prédictions sur 20** sont finies et reproduisent les prédictions du test sauvegardé avec un **écart absolu maximal de 0**. Le rejeu utilise la règle de disponibilité du backtest. Les horodatages réels de disponibilité restent à instrumenter côté inférence.
 - **Tests Spark distribués** réussis pour le schéma, les doublons, les trous et labels, les lags et fenêtres, l’isolation des séries, la protection temporelle, les splits, les trois entraînements, le tuning sur fixture, le calcul des métriques, la sauvegarde, le rechargement et les observations tardives.
 - **Suite existante** de 56 tests réussie. Ruff est vert sur `analytics/ml`. Les cinq écarts du dépôt identifiés avant cette mission subsistent dans les modules Silver et Gold existants.
