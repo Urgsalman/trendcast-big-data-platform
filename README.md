@@ -5,3 +5,4 @@ Une plateforme Big Data dédiée à l’ingestion des données de consultation d
 
 - [Automatisation des collectes](ingestion/README_AUTOMATION.md)
 - [Cluster Spark/HDFS et stockage Bronze](storage/README.md)
+- [Analyse, entraînement Spark ML et contrat d’inférence Wikimedia](analytics/ml/README.md)

@@ -6,3 +6,5 @@
 **/__pycache__
 .pytest_cache
 .ruff_cache
+shared_data/
+contexte_hala/

@@ -17,6 +17,12 @@ case "$job" in
   build_gold.py|wikimedia_analytics.py|hackernews_analytics.py|google_trends_analytics.py)
     job_path="/opt/trendcast/analytics/$job"
     ;;
+  profile_wikimedia.py|build_supervised_dataset.py|train_models.py|predict_sample.py)
+    job_path="/opt/trendcast/analytics/ml/$job"
+    ;;
+  check_pipeline.py)
+    job_path="/opt/trendcast/analytics/ml/tests/$job"
+    ;;
   *)
     echo "Job non autorisé : $job" >&2
     exit 1

@@ -28,3 +28,7 @@ Thumbs.db
 
 # Local ingestion publication receipts
 .trendcast/
+
+# Données transmises par l'équipe et documents de travail locaux
+/shared_data/
+/contexte_hala/
