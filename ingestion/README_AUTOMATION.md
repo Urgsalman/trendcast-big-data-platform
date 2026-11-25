@@ -1,142 +1,171 @@
-# Automatisation de l’ingestion — contribution de Zakaria
 
-Ce composant complète les collecteurs de Soulaimane sans modifier leur schéma,
-leurs identifiants ni leur point d’entrée manuel. Il publie sur
-`trendcast.events.validated` par défaut. Le stockage Spark/HDFS sera l’étape suivante.
+# Automatisation de l’ingestion — TrendCast
 
-## Installation et premier lancement (PowerShell, depuis la racine du dépôt)
+Ce composant complète les collecteurs Wikimedia, Hacker News et Google Trends.
+Il publie les événements validés dans Kafka, en conservant les identifiants et
+le schéma des événements.
 
-Utiliser Python 3.10 ou plus récent, avec pip et venv, et Docker Desktop démarré.
+## 1. Installation
+
+Depuis la racine du projet :
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r ingestion/requirements-automation.txt
+```
+
+Créer le fichier `.env` seulement s'il n'existe pas déjà :
+
+```powershell
 Copy-Item .env.example .env
 ```
 
-Créer `.env` seulement s’il n’existe pas déjà. Il contient les paramètres des sources
-et de Kafka ; conserver les secrets en dehors de Git. Les paramètres optionnels de
-l’automatisation sont décrits dans `ingestion/automation.env.example` : les ajouter
-au `.env` si nécessaire. Le mode automatisé demande `WIKIMEDIA_GRANULARITY=daily`
-et refuse `WIKIMEDIA_START` / `WIKIMEDIA_END`, car il gère lui-même les dates.
+Ne jamais publier le fichier `.env` sur Git.
+
+## 2. Configuration Wikimedia
+
+Configuration recommandée pour l'expérimentation :
+
+```env
+WIKIMEDIA_PROJECT=en.wikipedia
+WIKIMEDIA_GRANULARITY=daily
+WIKIMEDIA_DAYS_BACK=90
+```
+
+La collecte utilise les 20 pages configurées dans `WIKIMEDIA_PAGES`.
+
+La période se termine à la veille du jour courant en UTC.
+
+Les demandes historiques sont découpées en fenêtres de 90 jours maximum.
+
+Le programme utilise le fichier SQLite :
+
+```text
+.trendcast/ingestion.sqlite3
+```
+
+Il conserve les confirmations des publications et les dates de départ
+historiques par page.
+
+La date de départ effective respecte également la période configurée dans
+`WIKIMEDIA_DAYS_BACK`. Une ancienne date enregistrée dans SQLite ne force
+donc pas une collecte au-delà de la période actuellement configurée.
+
+## 3. Gestion des erreurs Wikimedia
+
+Les erreurs sont distinguées :
+
+- HTTP 404 : la page ou la période demandée ne fournit pas de données.
+  La plage concernée est mémorisée comme sans données.
+- Erreurs réseau ou HTTP autres que 404 : elles restent des erreurs de collecte.
+- Erreurs de validation ou de publication Kafka : elles restent signalées.
+
+Les journées sans données sont enregistrées séparément des confirmations
+de publication Kafka.
+
+Les réponses partielles restent contrôlées : les journées sans événement
+ni confirmation restent en attente.
+
+Une réponse HTTP 404 sur une plage entière est considérée comme une plage
+sans données. Cette interprétation doit être vérifiée si une page attendue
+renvoie systématiquement 404.
+
+## 4. Lancement manuel
+
+Démarrer Kafka :
 
 ```powershell
 docker compose up -d kafka
 ```
 
-Attendre que Kafka soit prêt, puis initialiser le topic (sans le supprimer s’il existe) :
+Créer le topic s'il n'existe pas :
 
 ```powershell
 docker compose exec -T kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic trendcast.events.validated --partitions 3 --replication-factor 1
-.\.venv\Scripts\python.exe -m ingestion.run_automation --once
 ```
 
-Le mode `--once` exécute les trois sources, puis se termine. Il renvoie un code 1
-si une publication échoue, si une collecte échoue au niveau du job ou si une journée
-Wikimedia demandée reste manquante. Pour cibler une seule source :
+Lancer uniquement Wikimedia :
 
 ```powershell
 .\.venv\Scripts\python.exe -m ingestion.run_automation --once --source wikimedia_pageviews
 ```
 
-Après cette vérification, lancer la collecte périodique :
+Lancer toutes les sources :
+
+```powershell
+.\.venv\Scripts\python.exe -m ingestion.run_automation --once
+```
+
+Lancer l'automatisation périodique :
 
 ```powershell
 .\.venv\Scripts\python.exe -m ingestion.run_automation
 ```
 
-Ce processus reste actif jusqu’à Ctrl+C ; il n’installe aucun service Windows.
-Au démarrage, chaque source est déclenchée une fois. Les déclenchements suivants
-utilisent les intervalles ci-dessous, à partir du démarrage du processus.
-Un seul job s’exécute à la fois ; une source lente peut retarder les autres.
-APScheduler regroupe les déclenchements manqués pour éviter leur accumulation.
-Utiliser un seul processus de planification par fichier d’état.
+Arrêter avec Ctrl+C.
 
-| Source | Intervalle par défaut | Fonctionnement |
-|---|---|---|
-| Wikimedia | 24 heures | Historique initial puis journées non confirmées |
-| Hacker News | 30 minutes | Relevé des articles configurés |
-| Google Trends | 1 heure | Relevé du flux RSS configuré |
+## 5. Fréquences par défaut
 
-## Historique, confirmations et reprise
+| Source | Fréquence |
+|---|---:|
+| Wikimedia | 24 heures |
+| Hacker News | 30 minutes |
+| Google Trends | 1 heure |
 
-- Au premier passage, Wikimedia demande les `WIKIMEDIA_DAYS_BACK` journées
-  précédentes, jusqu’à hier en UTC (90 par défaut dans l’automatisation).
-- Le début de l’historique est conservé séparément pour chaque page et projet.
-  Une interruption prolongée ne fait pas glisser ce début vers une date récente.
-- Seules les journées sans confirmation sont redemandées, en plages consécutives.
-  Une réponse partielle, une journée absente ou un échec de publication laisse
-  cette journée à reprendre lors du prochain passage. Les autres pages continuent.
-- Le fichier SQLite `.trendcast/ingestion.sqlite3` conserve les confirmations après
-  l’accusé de réception Kafka. Une autre destination Kafka a des confirmations distinctes.
-  Ce fichier local est ignoré par Git ; le conserver entre les redémarrages.
-- Les publications réalisées avec l’ancien point d’entrée manuel ne figurent pas
-  dans cet état. Un premier passage automatisé peut donc reprendre leur historique.
-- Les erreurs sont journalisées avec leur source ou leur identifiant. Un échec ne
-  marque pas l’événement comme publié. Le producteur est fermé après chaque job.
+Un seul processus de planification doit utiliser le même fichier SQLite.
 
-## Relevés Hacker News et Google Trends
+## 6. État et reprise
 
-Un relevé est défini par une fenêtre UTC de 30 ou 60 minutes par défaut.
-Un même identifiant n’est publié qu’une fois dans cette fenêtre. Lors de la fenêtre
-suivante, il peut être publié à nouveau, même sans changement : c’est une nouvelle
-observation, utile pour suivre l’évolution des scores et du trafic.
+Le fichier `.trendcast/ingestion.sqlite3` conserve les confirmations.
 
-Les `event_id` et `timestamp` des collecteurs restent inchangés. Le timestamp
-source est la date de publication, et non la date de collecte. Pour historiser
-les observations dans Bronze, conserver aussi le timestamp Kafka et les coordonnées
-`topic`, `partition`, `offset`. Ne pas supprimer tous les relevés en dédupliquant
-uniquement sur `event_id` : coordonner la règle Silver avec Hala.
-Une période d’arrêt ne permet pas de reconstituer les relevés manqués : ces API
-fournissent leur état courant. Une reprise au sein de la même fenêtre ignore les
-identifiants déjà confirmés jusqu’à la fenêtre suivante.
+Ne pas supprimer ce fichier pour relancer une collecte.
 
-## Limites de cette première version
+Une publication Kafka est confirmée dans SQLite uniquement après l'accusé
+de réception du broker.
 
-L’écriture Kafka et l’enregistrement SQLite ne forment pas une transaction commune.
-Si le processus s’arrête après l’accusé Kafka mais avant l’enregistrement local,
-un doublon reste possible au redémarrage (livraison au moins une fois).
-La couche Silver devra donc gérer les doublons de reprise sans perdre les relevés.
-Changer le broker de données derrière une adresse inchangée nécessite un nouvel
-état ; supprimer l’état existant provoque une nouvelle collecte initiale.
+L'écriture Kafka et l'enregistrement SQLite ne sont pas une transaction
+commune. Un arrêt entre ces deux opérations peut produire un doublon.
 
-Les collecteurs existants peuvent journaliser et ignorer certains articles ou items
-invalides. Le succès d’un job ne garantit donc pas que tous les items de la source
-ont été collectés. Les versions historiques déjà confirmées ne sont pas relues
-pour détecter d’éventuelles corrections de la source Wikimedia.
+Pour Hacker News et Google Trends, les observations sont organisées par
+fenêtre temporelle UTC. Un même identifiant peut donc être publié à nouveau
+dans une fenêtre ultérieure.
 
-## Vérifications
+Pour les couches Spark et HDFS, conserver les coordonnées Kafka
+`topic`, `partition` et `offset` afin de préserver les observations.
+
+## 7. Vérifications
+
+Exécuter les tests :
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
+```
+
+Vérifier la qualité du code :
+
+```powershell
 .\.venv\Scripts\python.exe -m ruff check .
 ```
 
-Les tests automatisés fonctionnent sans API externe ni broker. Ils couvrent la
-reprise depuis SQLite, les échecs de publication, les dates manquantes, les sources
-indépendantes, les relevés successifs et le déclenchement réel du planificateur.
-Ils ne remplacent pas l’essai d’intégration avec les API et Kafka.
+Vérifier les dépendances :
 
-Pour observer le topic pendant un essai :
+```powershell
+.\.venv\Scripts\python.exe -m pip check
+```
+
+## 8. Consommation Kafka
+
+Pour observer les messages :
 
 ```powershell
 docker compose exec -T kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic trendcast.events.validated --from-beginning --max-messages 5
 ```
 
-Documentation de référence : [APScheduler 3 — guide utilisateur](https://apscheduler.readthedocs.io/en/3.x/userguide.html).
+## 9. Précautions
 
-## Résultat de vérification du 19 novembre 2026
-
-- 48 tests réussis, dont 32 tests existants et 16 nouveaux cas d’automatisation.
-- `ruff check .` et `pip check` réussis avec les dépendances du projet.
-- Essai réel vers `trendcast.events.automation-smoke`, sur Kafka 4.1.0 :
-  2 journées pour une page Wikimedia, 3 articles Hacker News et 10 tendances MA.
-- Premier passage : 15 publications confirmées ; second passage : 0 nouvelle
-  publication. Les relevés de cet essai utilisaient une fenêtre de 24 heures
-  pour que les deux passages restent dans la même fenêtre de vérification.
-- Lecture indépendante du topic : 15 messages valides au total, répartis 2 / 3 / 10.
-- L’état et les logs de cet essai sont locaux et ignorés par Git. Aucun scheduler
-  n’est laissé actif en permanence après cet essai.
-
-Ces résultats vérifient ce petit volume et la reprise immédiate. La continuité
-sur plusieurs jours et la couche Spark/HDFS restent à vérifier lors des prochaines étapes.
+- Ne pas supprimer `.trendcast/ingestion.sqlite3`.
+- Ne pas supprimer les volumes Kafka ou HDFS.
+- Ne pas dédupliquer les observations Hacker News et Google Trends uniquement
+  par `event_id`.
+- Ne pas confondre une réponse HTTP 404 avec une erreur Kafka.
+- Vérifier les pages Wikimedia qui retournent régulièrement 404.

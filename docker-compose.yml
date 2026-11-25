@@ -1,3 +1,4 @@
+
 x-hadoop: &hadoop
   image: trendcast-hadoop:3.4.2
   build:
@@ -21,6 +22,10 @@ x-spark: &spark
   mem_limit: 1536m
 
 services:
+
+  # ==========================================
+  # KAFKA - MESSAGE BROKER
+  # ==========================================
   kafka:
     image: apache/kafka:4.1.0
     container_name: trendcast-kafka
@@ -30,7 +35,6 @@ services:
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      # Preserve localhost access for Python and add a Docker-internal listener.
       KAFKA_LISTENERS: INTERNAL://:29092,EXTERNAL://:9092,CONTROLLER://:9093
       KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
@@ -48,12 +52,20 @@ services:
       - kafka_data:/var/lib/kafka/data
     mem_limit: 1g
     healthcheck:
-      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "kafka:29092", "--list"]
+      test:
+        - CMD
+        - /opt/kafka/bin/kafka-topics.sh
+        - --bootstrap-server
+        - kafka:29092
+        - --list
       interval: 15s
       timeout: 10s
       retries: 12
       start_period: 30s
 
+  # ==========================================
+  # HDFS - NAMENODE
+  # ==========================================
   namenode:
     <<: *hadoop
     hostname: namenode
@@ -63,12 +75,19 @@ services:
     volumes:
       - hdfs_name:/data/name
     healthcheck:
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/namenode/9000"]
+      test:
+        - CMD
+        - bash
+        - -c
+        - exec 3<>/dev/tcp/namenode/9000
       interval: 10s
       timeout: 5s
       retries: 18
       start_period: 30s
 
+  # ==========================================
+  # HDFS - DATANODE 1
+  # ==========================================
   datanode-1:
     <<: *hadoop
     hostname: datanode-1
@@ -79,12 +98,19 @@ services:
       namenode:
         condition: service_started
     healthcheck:
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/9866"]
+      test:
+        - CMD
+        - bash
+        - -c
+        - exec 3<>/dev/tcp/localhost/9866
       interval: 10s
       timeout: 5s
       retries: 18
       start_period: 30s
 
+  # ==========================================
+  # HDFS - DATANODE 2
+  # ==========================================
   datanode-2:
     <<: *hadoop
     hostname: datanode-2
@@ -95,12 +121,19 @@ services:
       namenode:
         condition: service_started
     healthcheck:
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/9866"]
+      test:
+        - CMD
+        - bash
+        - -c
+        - exec 3<>/dev/tcp/localhost/9866
       interval: 10s
       timeout: 5s
       retries: 18
       start_period: 30s
 
+  # ==========================================
+  # HDFS INITIALIZATION
+  # ==========================================
   hdfs-init:
     <<: *hadoop
     command: ["init"]
@@ -113,37 +146,76 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # ==========================================
+  # SPARK MASTER
+  # ==========================================
   spark-master:
     <<: *spark
     hostname: spark-master
     entrypoint: ["/opt/spark/bin/spark-class"]
-    command: ["org.apache.spark.deploy.master.Master", "--host", "spark-master", "--port", "7077", "--webui-port", "8080"]
+    command:
+      - org.apache.spark.deploy.master.Master
+      - --host
+      - spark-master
+      - --port
+      - "7077"
+      - --webui-port
+      - "8080"
     ports:
       - "127.0.0.1:8080:8080"
     healthcheck:
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/spark-master/7077"]
+      test:
+        - CMD
+        - bash
+        - -c
+        - exec 3<>/dev/tcp/spark-master/7077
       interval: 10s
       timeout: 5s
       retries: 12
 
+  # ==========================================
+  # SPARK WORKER 1
+  # ==========================================
   spark-worker-1:
     <<: *spark
     hostname: spark-worker-1
     entrypoint: ["/opt/spark/bin/spark-class"]
-    command: ["org.apache.spark.deploy.worker.Worker", "--cores", "1", "--memory", "1g", "--webui-port", "8081", "spark://spark-master:7077"]
+    command:
+      - org.apache.spark.deploy.worker.Worker
+      - --cores
+      - "1"
+      - --memory
+      - 1g
+      - --webui-port
+      - "8081"
+      - spark://spark-master:7077
     depends_on:
       spark-master:
         condition: service_healthy
 
+  # ==========================================
+  # SPARK WORKER 2
+  # ==========================================
   spark-worker-2:
     <<: *spark
     hostname: spark-worker-2
     entrypoint: ["/opt/spark/bin/spark-class"]
-    command: ["org.apache.spark.deploy.worker.Worker", "--cores", "1", "--memory", "1g", "--webui-port", "8081", "spark://spark-master:7077"]
+    command:
+      - org.apache.spark.deploy.worker.Worker
+      - --cores
+      - "1"
+      - --memory
+      - 1g
+      - --webui-port
+      - "8081"
+      - spark://spark-master:7077
     depends_on:
       spark-master:
         condition: service_healthy
 
+  # ==========================================
+  # BRONZE - ONE-OFF SPARK JOBS
+  # ==========================================
   bronze:
     <<: *spark
     hostname: bronze
@@ -161,6 +233,38 @@ services:
       spark-worker-2:
         condition: service_started
 
+  # ==========================================
+  # BRONZE STREAM - CONTINUOUS KAFKA TO HDFS
+  # ==========================================
+  bronze-stream:
+    <<: *spark
+    hostname: bronze-stream
+    entrypoint: ["/opt/trendcast/submit.sh"]
+    environment:
+      HADOOP_CONF_DIR: /opt/hadoop-conf
+      HADOOP_USER_NAME: hadoop
+      PYSPARK_PYTHON: python3
+      SPARK_DAEMON_MEMORY: 256m
+      TRENDCAST_JOB: kafka_to_bronze.py
+      KAFKA_TOPIC: trendcast.events.validated
+    volumes:
+      - spark_ivy:/opt/spark/.ivy2
+    depends_on:
+      kafka:
+        condition: service_healthy
+      hdfs-init:
+        condition: service_completed_successfully
+      spark-master:
+        condition: service_healthy
+      spark-worker-1:
+        condition: service_started
+      spark-worker-2:
+        condition: service_started
+    restart: unless-stopped
+
+# ==========================================
+# PERSISTENT VOLUMES
+# ==========================================
 volumes:
   kafka_data:
   hdfs_name:
