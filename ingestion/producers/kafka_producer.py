@@ -59,7 +59,9 @@ class KafkaEventProducer:
             value=event,
         )
 
-        metadata = future.get(timeout=60)
+        # Wait for Kafka broker confirmation.
+        # Timeout is slightly higher than delivery_timeout_ms.
+        metadata = future.get(timeout=130)
 
         logger.info(
             "Published event=%s topic=%s partition=%s offset=%s",
