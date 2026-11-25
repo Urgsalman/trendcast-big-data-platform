@@ -17,9 +17,6 @@ COLORS = {"ink": "#17273a", "blue": "#126982", "amber": "#a85124", "grid": "#d9e
 NAMES = {
     "Persistence": "Persistance",
     "WeeklyWithPersistenceFallback": "Hebdomadaire",
-    "LinearRegression": "Linéaire",
-    "DecisionTreeRegressor": "Arbre",
-    "RandomForestRegressor": "Forêt",
 }
 
 
@@ -87,67 +84,125 @@ def profile_figure(profile, gold_daily, panel_daily, period, output):
     save(fig, output)
 
 
-def comparisons(metrics, split):
-    baselines = [
-        (NAMES[key], value) for key, value in metrics[f"{split}_baselines"].items()
-    ]
-    if split == "validation":
-        initial = metrics["validation_initial"]
-        leaders = [
-            min(
-                (trial for trial in initial if trial["algorithm"] == name),
-                key=lambda t: (t["metrics"]["mae"], t["metrics"]["rmse"]),
-            )
-            for name in list(NAMES)[2:]
-        ]
-        challenger = min(
-            metrics["validation_tuning"],
-            key=lambda t: (t["metrics"]["mae"], t["metrics"]["rmse"]),
-        )
-    else:
-        leaders = metrics["test_initial"]
-        challenger = metrics["test_tuned_challenger"]
-    return [
-        *baselines,
-        *((NAMES[t["algorithm"]], t["metrics"]) for t in leaders),
-        (NAMES[challenger["algorithm"]] + " (réglage)", challenger["metrics"]),
-    ]
-
-
 def comparison_figure(metrics, output):
-    fig, axes = plt.subplots(2, 2, figsize=(11, 6), layout="constrained")
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8), layout="constrained")
     fig.suptitle(
-        "Comparaison des erreurs · mêmes observations par partition", fontweight="bold"
+        "Wikimedia · Ablation, validation chronologique et comparaison rétrospective",
+        fontweight="bold",
     )
-    for axes_row, split, title in zip(
-        axes, ("validation", "test"), ("Validation", "Test final")
-    ):
-        comparison = comparisons(metrics, split)
-        for axis, metric in zip(axes_row, ("mae", "rmse")):
-            labels = [name for name, _ in comparison]
-            values = [data[metric] for _, data in comparison]
-            axis.barh(
-                labels,
-                values,
-                color=[COLORS["ink"]] * 2 + [COLORS["blue"]] * 3 + [COLORS["amber"]],
-                height=0.62,
-            )
-            axis.invert_yaxis()
-            axis.set(title=f"{title} · {metric.upper()}", xlabel="Erreur en vues")
-            axis.xaxis.set_major_formatter(FuncFormatter(number))
-            axis.xaxis.set_major_locator(MaxNLocator(nbins=6))
+    v1 = next(trial for trial in metrics["screening"] if trial["id"] == "v1_core")
+    screened = [
+        trial for trial in metrics["screening"] if trial["id"].startswith("ablation_")
+    ]
+    ablations = [
+        (
+            {"core": "Base", "all": "Tous"}.get(
+                trial["feature_set"], trial["feature_set"].replace("without_", "Sans ")
+            ),
+            ratio(trial["metrics"], v1["metrics"]),
+        )
+        for trial in [v1, *screened]
+    ]
+    axes[0, 0].barh(
+        [name for name, _ in ablations],
+        [value for _, value in ablations],
+        color=COLORS["blue"],
+    )
+    axes[0, 0].axvline(1, color=COLORS["ink"], ls="--", lw=1)
+    axes[0, 0].invert_yaxis()
+    axes[0, 0].set(
+        title="Ablation de l’arbre · dernière fenêtre",
+        xlabel="Score relatif à la base (↓)",
+    )
+    ref = next(
+        candidate
+        for candidate in metrics["walk_forward"]
+        if candidate["id"] == "v1_core"
+    )
+    winner = next(
+        candidate
+        for candidate in metrics["walk_forward"]
+        if candidate["id"] == metrics["selected"]["id"]
+    )
+    other = next(
+        candidate
+        for candidate in metrics["walk_forward"]
+        if candidate["id"] not in {ref["id"], winner["id"]}
+    )
+    winner_label = "Modèle retenu" if metrics["deployment_approved"] else "Candidat"
+    other_label = (
+        "Mélange hebdomadaire"
+        if other["id"].startswith("weekly_blend_")
+        else "Meilleur autre finaliste"
+    )
+    for candidate, color, label in [
+        (winner, COLORS["amber"], winner_label),
+        (other, COLORS["blue"], other_label),
+        (ref, COLORS["ink"], "Arbre v1 réajusté"),
+    ]:
+        axes[0, 1].plot(
+            [fold["fold"][5:] for fold in candidate["folds"]],
+            [
+                ratio(a["metrics"], b["metrics"])
+                for a, b in zip(candidate["folds"], ref["folds"])
+            ],
+            marker="o",
+            label=label,
+            color=color,
+        )
+    axes[0, 1].set(
+        title="Fenêtres successives",
+        xlabel="Début de validation",
+        ylabel="Score relatif (↓)",
+    )
+    axes[0, 1].legend(frameon=False, fontsize=8)
+    rows = [
+        (NAMES[key], val) for key, val in metrics["retrospective_baselines"].items()
+    ]
+    rows.extend(
+        [
+            ("Arbre v1 livré", metrics["retrospective_v1"]),
+            (
+                "Arbre v1 réajusté",
+                metrics["retrospective_candidates"]["v1_core"]["metrics"],
+            ),
+            (other_label, metrics["retrospective_candidates"][other["id"]]["metrics"]),
+            (
+                winner_label,
+                metrics["retrospective_candidates"][winner["id"]]["metrics"],
+            ),
+        ]
+    )
+    for axis, metric in zip(axes[1], ("mae", "rmse")):
+        axis.barh(
+            [name for name, _ in rows],
+            [data[metric] for _, data in rows],
+            color=[COLORS["ink"]] * 2 + [COLORS["blue"]] * 3 + [COLORS["amber"]],
+            height=0.65,
+        )
+        axis.invert_yaxis()
+        axis.set(title=f"Ancien test · {metric.upper()}", xlabel="Erreur en vues")
+        axis.xaxis.set_major_formatter(FuncFormatter(number))
+        axis.xaxis.set_major_locator(MaxNLocator(nbins=5))
     save(fig, output)
+
+
+def ratio(candidate, reference):
+    return (
+        candidate["mae"] / reference["mae"] + candidate["rmse"] / reference["rmse"]
+    ) / 2
 
 
 def predictions_figure(values, metrics, page, output):
     importance = metrics.get("feature_importance")
+    winner_label = "Modèle retenu" if metrics["deployment_approved"] else "Candidat"
     fig, axes = plt.subplots(
         3 if importance else 2,
         1,
         figsize=(9, 8 if importance else 6),
         layout="constrained",
     )
-    fig.suptitle("Prédictions et erreurs sur le test final", fontweight="bold")
+    fig.suptitle("Vues prévues et erreurs sur le test rétrospectif", fontweight="bold")
     page_values = values[values.page_title == page].sort_values("prediction_date")
     if page_values.empty:
         raise ValueError(f"Page absente des prédictions enregistrées : {page}")
@@ -161,16 +216,33 @@ def predictions_figure(values, metrics, page, output):
     axes[0].plot(
         page_values.prediction_date,
         page_values.predicted_views,
-        label="Prédit",
+        label=winner_label,
         color=COLORS["amber"],
         lw=1.5,
+    )
+    axes[0].plot(
+        page_values.prediction_date,
+        page_values.v1_prediction,
+        label="Arbre v1 livré",
+        color=COLORS["blue"],
+        lw=1.1,
+        ls="--",
     )
     axes[0].set(title=page.replace("_", " "), ylabel="Vues")
     axes[0].yaxis.set_major_formatter(FuncFormatter(number))
     axes[0].legend(frameon=False)
     dates(axes[0])
     errors = values.predicted_views - values.target_next_day_views
-    axes[1].hist(errors, bins=45, color=COLORS["blue"])
+    reference_errors = values.v1_prediction - values.target_next_day_views
+    axes[1].hist(
+        [reference_errors, errors],
+        bins=45,
+        histtype="step",
+        linewidth=1.5,
+        color=[COLORS["blue"], COLORS["amber"]],
+        label=["Arbre v1 livré", winner_label],
+    )
+    axes[1].legend(frameon=False)
     axes[1].axvline(0, color=COLORS["ink"], lw=1)
     axes[1].set(xlabel="Prédiction − réel (vues)", ylabel="Observations", yscale="log")
     axes[1].xaxis.set_major_formatter(FuncFormatter(number))

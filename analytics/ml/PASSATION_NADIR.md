@@ -2,22 +2,22 @@
 
 ## Modèle et résultats
 
-`hala-20261125-v1` est un `PipelineModel` Spark ML composé d’un `VectorAssembler` et d’un arbre de décision. Il prédit le nombre de vues du jour calendaire suivant pour les 20 titres technologiques de `en.wikipedia` enregistrés dans le manifeste. L’arbre retenu a une profondeur maximale de 7, un minimum de 5 observations par nœud et 32 bins.
+`hala-20261125-v2` est le modèle actif de prévision Wikimedia. Le `PipelineModel` contient un `VectorAssembler` et un arbre de décision Spark ML. Il prédit le nombre de vues du jour calendaire suivant pour les 20 titres de `en.wikipedia` du manifeste. L’arbre utilise `maxDepth=9`, `minInstancesPerNode=8`, `maxBins=64` et `minInfoGain=25.0`. Nadir peut charger ce pipeline figé et démarrer l’intégration sans réentraînement. La signature d’inférence et les quatre variables gardent le même ordre.
 
 | Partition | Dates cibles incluses | Lignes | MAE de l’arbre réglé | RMSE de l’arbre réglé |
 |---|---|---:|---:|---:|
-| Entraînement | 2025-11-26 à 2026-08-06 | 5 080 | — | — |
-| Validation | 2026-08-07 à 2026-09-29 | 1 080 | 2 360,07 | 12 944,70 |
-| Test indépendant | 2026-09-30 à 2026-11-23 | 1 100 | 2 170,20 | 9 557,23 |
+| Réajustement final | 2025-11-26 à 2026-09-27 | 6 120 | — | — |
+| Validation chronologique, moyenne des trois fenêtres | 2026-05-25 à 2026-09-27 | 2 520 | 2 030,78 | 9 923,56 |
+| Comparaison rétrospective sur l’ancien test | 2026-09-30 à 2026-11-23 | 1 100 | 2 084,00 | 9 310,54 |
 
-Sur le test, la baseline de persistance obtient une MAE de 2 823,81 et une RMSE de 12 762,44. La baseline hebdomadaire conserve la meilleure MAE, à 2 141,94. L’arbre réglé obtient la meilleure RMSE, à 9 557,23. Les pics imprévus concentrent les erreurs. Les pages hors panel et celles sans historique éligible ne produisent aucun score. La latence de réception réelle n’est pas mesurée dans Gold.
+L’arbre retenu améliore deux fenêtres de validation sur trois par rapport à l’ancienne configuration réajustée. Sur l’ancien test, la v1 obtenait une MAE de 2 170,20 et une RMSE de 9 557,23. La référence hebdomadaire obtient 2 141,94 et 10 636,73. Cette période était déjà connue lors de la conception des expériences. Les pics imprévus concentrent encore les erreurs et le 95e percentile absolu augmente. Les pages hors panel et celles sans historique éligible ne produisent aucun score. Gold ne permet pas de mesurer la latence de réception réelle.
 
 [Rapport expérimental et graphiques sur GitHub](https://github.com/Urgsalman/trendcast-big-data-platform/blob/hala/analytics/ml/RESULTATS.md) · [Guide de reproduction sur GitHub](https://github.com/Urgsalman/trendcast-big-data-platform/blob/hala/analytics/ml/README.md)
 
 ## Fichiers et dépendances
 
-- **Modèle HDFS chez Hala** sous `/trendcast/models/wikimedia_next_day_views/hala-20261125-v1`.
-- **Archive à recevoir par un canal privé** nommée `TrendCast_Hala_ML_Model_hala-20261125-v1.zip`. Elle contient `hala-20261125-v1/pipeline/`, avec toutes les métadonnées et données internes Spark ML, `hala-20261125-v1/manifest/`, ce document et `SHA256SUMS.txt`. Le manifeste conserve les mesures d’évaluation et les références de provenance de l’expérience. Le Gold et les prédictions détaillées de test restent dans le HDFS de Hala.
+- **Modèle HDFS chez Hala** sous `/trendcast/models/wikimedia_next_day_views/hala-20261125-v2`.
+- **Archive à recevoir par un canal privé** nommée `TrendCast_Hala_ML_Model_hala-20261125-v2.zip`. Elle contient `hala-20261125-v2/pipeline/`, avec toutes les métadonnées et données internes Spark ML, `hala-20261125-v2/manifest/`, ce document et `SHA256SUMS.txt`. Le manifeste conserve les mesures d’évaluation et les références de provenance de l’expérience. Le Gold et les prédictions détaillées restent dans le HDFS de Hala.
 - **Code d’inférence** dans `analytics/ml/predict_sample.py` et `analytics/ml/features.py` sur la branche `hala`. Garder le paquet `analytics.ml` dans le chemin Python du job Spark.
 - **Environnement vérifié** avec Spark/PySpark 3.5.7, Scala 2.12.18, Java 17.0.16, Python 3.10.12 et NumPy 1.26.4 dans l’image Spark. Le cluster local utilise HDFS 3.4.2. Reconstruire l’image Spark de la branche pour disposer du code et de NumPy.
 
@@ -27,7 +27,7 @@ Depuis la racine du dépôt sur Windows, avec le NameNode de Nadir déjà actif,
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$version = 'hala-20261125-v1'
+$version = 'hala-20261125-v2'
 $zip = "./shared_data/delivery/TrendCast_Hala_ML_Model_$version.zip"
 $id = [guid]::NewGuid().ToString('N')
 $unpack = Join-Path $env:TEMP "trendcast-model-$id"
@@ -83,7 +83,7 @@ Le producteur envoie une enveloppe JSON sur `trendcast.events.validated`. Lire u
 
 Enregistrer un horodatage UTC durable lors de la première mise à disposition, avec `(topic, partition, offset)` pour identifier le message lors des reprises. Garder cette valeur sur chaque rejeu. Conserver aussi l’identité métier `(project, page_title, event_date)` et les versions reçues. Pour un rattrapage ancien sans preuve de réception, enregistrer l’heure réelle de mise à disposition dans le service. Le délai simulé du backtest appartient uniquement à l’évaluation.
 
-Pour chaque décision, lire un instantané des observations déjà mises à disposition, limité aux 28 jours précédant la référence et au panel du manifeste. Une table historique durable alimentée depuis le topic convient, y compris après redémarrage. À l’intérieur de la fenêtre, une seule observation éligible suffit pour donner un score. Les retransmissions égales sont regroupées. Si des valeurs contradictoires pour une même date ont déjà été reçues au moment du calcul, cette date est écartée. Les observations tardives peuvent servir aux décisions ultérieures tant qu’elles sont encore dans la fenêtre. Conserver la sortie déjà émise et son heure de décision pour rendre les reprises idempotentes.
+Pour chaque décision, lire un instantané des observations déjà mises à disposition, limité aux 28 jours précédant la référence et au panel du manifeste. Une table historique durable alimentée depuis le topic convient, y compris après redémarrage. Une seule observation éligible suffit pour donner un score. Un jour manquant entraîne un repli sur la dernière observation éligible. Les pages hors panel et celles sans observation éligible ne produisent aucune ligne. Les retransmissions égales sont regroupées. Si des valeurs contradictoires pour une même date ont déjà été reçues au moment du calcul, cette date est écartée. Les observations tardives peuvent servir aux décisions ultérieures tant qu’elles sont encore dans la fenêtre. Conserver la sortie déjà émise et son heure de décision pour rendre les reprises idempotentes.
 
 ## Cible et variables
 
@@ -96,11 +96,11 @@ Pour la référence `t`, décider avant **00:00 UTC de `t+1`**. La version livr�
 | 3 | `weekday_sin` | Sinus de `2π × (jour_de_semaine(t+1) − 1) / 7` |
 | 4 | `weekday_cos` | Cosinus du même angle |
 
-Spark numérote les jours de semaine du dimanche 1 au samedi 7. Passer les observations historiques à `forecast_for_reference` pour réutiliser la préparation exacte de l’entraînement. Le pipeline sauvegardé reçoit le résultat de cette préparation et produit une prédiction numérique. La sortie fournit `project`, `page_title`, `prediction_date:date`, `predicted_views:double`, `model_version` et `prediction_timestamp:timestamp`.
+Spark numérote les jours de semaine du dimanche 1 au samedi 7. Passer les observations historiques à `forecast_for_reference` pour réutiliser la préparation exacte de l’entraînement. Le pipeline sauvegardé reçoit le résultat de cette préparation et produit une prédiction numérique. La sortie fournit `project:string`, `page_title:string`, `prediction_date:date`, `predicted_views:double`, `model_version:string` et `prediction_timestamp:timestamp`.
 
 ### Exemple de prédiction avec un lot de contrôle
 
-Ce lot utilise une observation réelle de la vérification du modèle avec un horodatage de réception illustratif. La prédiction attendue pour `Big_data` le 23 novembre est **186,7375 vues**. Dans le flux, remplacer le lot et l’instant de décision par les données et horaires réellement mesurés.
+Ce lot utilise une observation réelle du contrôle de parité et un horodatage de réception illustratif. La prévision attendue pour `Big_data` le 23 novembre est **205,79235 vues environ**. La dernière observation disponible était de 190 vues et la cible observée de 242 vues. En exploitation, fournir toutes les réceptions de la fenêtre pour conserver le repli en cas de retard ou de conflit sur le jour le plus récent.
 
 ```python
 from datetime import date, datetime, timezone
@@ -109,7 +109,7 @@ from analytics.ml.predict_sample import forecast_for_reference, load_forecaster
 
 spark.conf.set("spark.sql.session.timeZone", "UTC")
 model_uri = (
-    "hdfs://namenode:9000/trendcast/models/wikimedia_next_day_views/hala-20261125-v1"
+    "hdfs://namenode:9000/trendcast/models/wikimedia_next_day_views/hala-20261125-v2"
 )
 pipeline, manifest = load_forecaster(spark, model_uri)
 
@@ -138,8 +138,10 @@ predictions.show(truncate=False)
 
 ## Vérifications côté streaming
 
+Le contrôle ML a comparé `foreachBatch` au calcul batch avec un flux Parquet de test. La recette Kafka complète reste à exécuter dans l’environnement d’intégration.
+
 1. Comparer le schéma issu du topic aux cinq colonnes attendues et vérifier les dates près de minuit UTC.
 2. Vérifier les offsets et la stabilité de `available_at` après redémarrage. Tester une arrivée exactement à l’heure de décision, une arrivée après, une retransmission et un conflit sur les vues.
 3. Vérifier que le service planifie la prédiction et la rend disponible avant le début de la cible. Suivre la couverture du panel et les absences d’historique.
-4. Rejouer un instantané contrôlé avec la même heure de décision et comparer les lignes et les prédictions au calcul batch. Vérifier l’unicité de `(project, page_title, prediction_date, model_version)` pour une exécution quotidienne.
+4. Rejouer un instantané contrôlé avec la même heure de décision et comparer les prédictions au calcul batch. Dans `foreachBatch`, charger l’historique durable jusqu’à la décision et passer un DataFrame batch à `forecast_for_reference`. Le micro-lot seul peut manquer des jours nécessaires. Vérifier l’unicité de `(project, page_title, prediction_date, model_version)` pour une exécution quotidienne.
 5. Vérifier le chargement du modèle au démarrage sur le HDFS de Nadir. Comparer des vues collectées et les valeurs Gold à page et date égales, car la provenance de chaque ligne Gold manque. Tester la persistance, la latence et les reprises de son propre flux.

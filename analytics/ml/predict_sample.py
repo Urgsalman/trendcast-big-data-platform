@@ -22,7 +22,7 @@ from analytics.ml.features import (
     temporal_features,
 )
 from analytics.ml.runtime import SERIES, print_manifest, read_manifest, start_spark
-from analytics.ml.train_models import finite, scored_with
+from analytics.ml.train_models import finite, prediction_with_recipe
 
 OUTPUT_COLUMNS = (
     *SERIES,
@@ -81,7 +81,7 @@ def forecast_for_reference(
         F.col("latest_views").isNotNull()
     )
     return (
-        scored_with(model.transform(features), F.col("prediction"))
+        prediction_with_recipe(model.transform(features), manifest.get("selected"))
         .where(F.col("predicted_views").isNotNull())
         .withColumn("model_version", F.lit(manifest["version"]))
         .withColumn("prediction_timestamp", F.lit(submitted))

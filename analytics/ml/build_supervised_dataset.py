@@ -84,6 +84,8 @@ def build_dataset(spark, args, output):
         )
         result = labelled.where(
             F.col(TARGET).isNotNull() & F.col("latest_views").isNotNull()
+        ).withColumn(
+            "label_available_day", F.date_add("prediction_date", args.availability_days)
         )
         metadata = {
             "version": args.version,
@@ -95,6 +97,7 @@ def build_dataset(spark, args, output):
             "first_input_day": args.start,
             "last_input_day": args.end,
             "availability_days": args.availability_days,
+            "label_availability_policy": "end of prediction day plus the simulated daily reporting delay, represented by prediction_date + availability_days at 00:00 UTC",
             "scoring_deadline": "prediction_date 00:00 UTC exclusive",
             "raw_panel_rows": panel.count(),
             "valid_panel_rows_before_dedup": keys.agg(
