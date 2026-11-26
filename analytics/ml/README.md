@@ -2,23 +2,28 @@
 
 Ce module prédit les vues du prochain jour calendaire pour un panel de pages technologiques de Wikipédia en anglais. Il intervient après les traitements Gold de TrendCast. HDFS conserve les exports, le jeu supervisé et le modèle. Spark SQL profile les données et construit les features temporelles. Spark MLlib ajuste, compare et sauvegarde les pipelines. Les jobs utilisent **Spark 3.5.7 en mode distribué**. Les indicateurs Hacker News et Google Trends restent descriptifs.
 
-Le seul modèle actif pour la passation est l’arbre de décision `hala-20261125-v2`, sous `/trendcast/models/wikimedia_next_day_views/hala-20261125-v2`.
+**La politique finale de démonstration et d’intégration est `hala-j1-20261126-v1`.** Entrer par `candidate.py` et suivre la [procédure unique de soutenance](DEMONSTRATION.md).
 
-[Rapport expérimental, résultats v2 et références v1](RESULTATS.md)
+| Élément | Rôle |
+| --- | --- |
+| `hala-j1-20261126-v1` | Forêt logarithmique pour les vues et la direction lorsque J−1 est admissible. La direction est calculée à partir du volume prédit, le rang vient de la persistance normalisée. |
+| `hala-20261125-v2` | Arbre de décision de secours lorsque seul J−2 est admissible. C’est aussi le modèle officiel actuel de Nadir pendant la validation en parallèle. |
+| `hala-20261125-v1` | Ancienne livraison conservée comme référence historique. |
+| Brut–log directionnel, forêt multi-âges et autres variantes | Expériences archivées et résultats scientifiques de comparaison. |
 
-[Passation à Nadir, import et contrôle de l’archive du modèle](PASSATION_NADIR.md)
-
-Le candidat J−1/J−2 fait l’objet d’une validation en parallèle. [Résultats scientifiques](RESULTATS_CANDIDAT_J1.md) · [Contrat candidat pour Nadir](PASSATION_CANDIDAT_J1.md) · [Critères d’activation](VALIDATION_CANDIDAT_J1.md)
+Sans total admissible à J−1 ni J−2, le candidat journalise une abstention. L’historique de soutenance utilise des disponibilités simulées. La mise en service de J−1 dépend de la disponibilité réellement mesurée. [Résultats finaux](RESULTATS_CANDIDAT_J1.md) · [Contrat pour Nadir](PASSATION_CANDIDAT_J1.md) · [Critères d’activation](VALIDATION_CANDIDAT_J1.md)
 
 ```mermaid
 flowchart LR
-    Gold[(Exports Gold en HDFS)] --> Profile[Profilage Spark SQL]
-    Gold --> Preparation[Préparation temporelle]
-    Preparation --> Dataset[(Parquet supervisé versionné)]
-    Dataset --> Training[Comparaison et tuning Spark ML]
-    Training --> Model[(PipelineModel et manifeste)]
-    Model --> Forecast[Chargement et test de parité]
-    Preparation -. Transformations partagées .-> Forecast
+    Gold[(Gold en HDFS)] --> Profile[Profilage et jeu supervisé Spark SQL]
+    Profile --> Replay[Replay avec réceptions simulées]
+    Replay --> Decision{Jour admissible}
+    Decision -->|J−1| Forest[Forêt logarithmique]
+    Decision -->|J−2| Tree[Arbre V2]
+    Decision -->|Aucun| Skip[Abstention journalisée]
+    Forest --> Forecast[Vues et direction J+1]
+    Tree --> Forecast
+    Decision --> Rank[Classement par persistance normalisée]
 ```
 
 ## Données et périmètre
@@ -32,10 +37,12 @@ Le profilage couvre les 462 056 observations et 56 758 pages de Gold Wikimed
 
 - Pour une date de référence `t`, la date cible est `t+1`, et `target_next_day_views` est la valeur de la même paire projet–page exactement à cette date. La grille des dates de référence est générée indépendamment des valeurs observées.
 - Les dates invalides, les identifiants vides et les vues nulles ou négatives sont écartés. À clé identique, plusieurs valeurs égales deviennent une seule observation et des valeurs contradictoires entraînent l’exclusion de la clé. La cible manquante est exclue. Une absence de mesure reste manquante.
-- La prévision est destinée à être produite avant minuit UTC ouvrant `t+1`. Le lot quotidien de `t` peut n’être disponible qu’après cette échéance. Le backtest fixe un délai conservateur de deux jours calendaires relativement à `t` et utilise les vues au plus tard de `t−2`. Cette hypothèse peut être réévaluée avec des reçus horodatés réels. La documentation officielle indique qu’un lot peut prendre plusieurs heures, voire au moins 24 heures en cas d’incident. La règle d’inférence exclut aussi toute réception à l’instant de décision ou après.
+- La décision intervient avant minuit UTC ouvrant `t+1`. Le candidat exclut les réceptions à l’instant de décision ou après. Il vérifie qu’un total journalier a été reçu après la clôture du jour source, puis privilégie `t−1` et se replie sur `t−2`. Le Gold actuel ne conserve pas les heures de disponibilité durable. Le cas de soutenance utilise les CSV de replay du ZIP.
 [Disponibilité des données Wikimedia](https://doc.wikimedia.org/generated-data-platform/aqs/analytics-api/documentation/troubleshooting.html)
 
-## Préparation et expérience
+## Historique de préparation et de sélection V1/V2
+
+Les conventions ci-dessous décrivent l’étude qui a produit l’arbre de secours V2. [Rapport expérimental V1/V2](RESULTATS.md)
 
 | Élément | Règle |
 |---|---|
@@ -54,11 +61,17 @@ Le profilage couvre les 462 056 observations et 56 758 pages de Gold Wikimed
 
 ## Reproduction du candidat J1
 
-Cloner `hala` et obtenir auprès de Hala le ZIP candidat et le fichier compagnon `.zip.sha256`. Les dépendances Python du test Spark sont dans l’image TrendCast. Installer pytest, Ruff et les dépendances d’ingestion pour les tests du dépôt. NumPy et pandas servent au recalcul scientifique local.
+Le point d’entrée de démonstration est `candidate.py`. Suivre [le parcours de soutenance](DEMONSTRATION.md) pour préparer le cluster, installer les deux modèles, vérifier Gold et exécuter d’abord le scénario **20 routes J−1**, puis le scénario secondaire de robustesse.
+
+La politique se trouve dans HDFS sous `/trendcast/models/wikimedia_next_day_views/candidates/hala-j1-20261126-v1`. Le script `install_final_model.ps1` accepte le ZIP de livraison r2 local, ou `-FromRelease` si la release est publiée et GitHub CLI authentifié. [Installation et traitement des chemins absents](PASSATION_CANDIDAT_J1.md#installation-des-modèles)
+
+L’étude porte sur la prévision de `target_next_day_views` de 20 pages sur 366 jours. Parmi les **40 variables candidates** et quatre familles Spark ML étudiées, les pipelines déployables retiennent `latest_views`, `latest_age`, `weekday_sin` et `weekday_cos` dans cet ordre. Les trois fenêtres chronologiques totalisent **126 jours et 2 520 observations**. La MAE de **1 776,20** est celle de la forêt à J−1 simulé. Le F1 macro de direction est **0,592** et la Precision@5 du classement par persistance **49,52 %**. [Fenêtres, baselines et métriques complètes](RESULTATS_CANDIDAT_J1.md)
+
+### Contrôles hors démonstration
+
+Les tests Python du dépôt se lancent localement. Spark et ses dépendances sont dans l’image TrendCast. Le test distribué figure dans le scénario secondaire de la [démonstration](DEMONSTRATION.md#4-vérifier-la-robustesse-si-le-professeur-le-demande).
 
 ```powershell
-git clone --branch hala --single-branch https://github.com/Urgsalman/trendcast-big-data-platform.git
-Set-Location trendcast-big-data-platform
 py -3.13 -m venv .venv
 & './.venv/Scripts/python.exe' -m pip install -r ingestion/requirements-automation.txt numpy==2.5.5 pandas==3.1.1
 & './.venv/Scripts/python.exe' -m pytest -q --tb=short -p no:cacheprovider
@@ -66,28 +79,14 @@ py -3.13 -m venv .venv
 & './.venv/Scripts/ruff.exe' format --check --no-cache analytics/ml
 ```
 
-Préparer les conteneurs Linux Spark et HDFS avec les commandes de construction et de démarrage de la section Windows ci-dessous, jusqu’au contrôle des workers. Puis [vérifier et importer le ZIP](PASSATION_CANDIDAT_J1.md#fichiers-et-importation-hdfs). Le candidat utilise le manifeste, les deux modèles et le replay du ZIP. Lancer le test distribué depuis la racine du clone.
+Pour recalculer les sept tableaux, extraire le ZIP r2 dans un dossier distinct puis utiliser son dossier `hala-j1-20261126-v1` comme valeur de `$bundle`. Les 3 620 clés de référence restent dans le ZIP. Le script compare les métriques recalculées aux CSV fournis.
 
 ```powershell
-$analytics = (Resolve-Path 'analytics').Path
-$package = 'hdfs://namenode:9000/trendcast/models/wikimedia_next_day_views/candidates/hala-j1-20261126-v1'
-$run = [guid]::NewGuid().ToString('N')
-$check = "hdfs://namenode:9000/trendcast/analytics/wikimedia_ml_checks/candidate-$run"
-docker compose exec -T namenode hdfs dfs -mkdir -p /trendcast/analytics/wikimedia_ml_checks
-$bash = 'export PYTHONDONTWRITEBYTECODE=1 HADOOP_USER_NAME=hadoop; ip="$(hostname -i)"; exec /opt/spark/bin/spark-submit --master spark://spark-master:7077 --driver-memory 768m --executor-memory 512m --conf "spark.driver.host=$ip" --conf spark.driver.bindAddress=0.0.0.0 --conf spark.executor.cores=1 --conf spark.cores.max=2 --conf spark.sql.shuffle.partitions=3 /opt/trendcast/analytics/ml/tests/check_candidate.py --package "$1" --output "$2"'
-docker compose --profile jobs run --pull never --rm --no-deps -T -v "${analytics}:/opt/trendcast/analytics:ro" --entrypoint /bin/bash bronze -c $bash candidate "$package" "$check"
-```
-
-La sortie `CANDIDATE_VERIFIED` contrôle les 20 décisions, les 15 prévisions, les abstentions et la parité des deux microlots. Le [contrat candidat](PASSATION_CANDIDAT_J1.md#chargement-et-exemple-gold) montre comment charger les pipelines, produire une prévision J+1 et lire le journal des routes.
-
-Pour reproduire les sept tableaux, utiliser le répertoire `$bundle` créé par la procédure d’extraction du ZIP. Le script recalcule les métriques à partir des 3 620 clés de prédictions, labels et références figées. Il vérifie les résultats numériques contre les CSV livrés. Les données de référence sont dans le ZIP local, hors Git.
-
-```powershell
-$tables = Join-Path (Get-Location) "recalcul-candidat-$([guid]::NewGuid().ToString('N'))"
+$tables = Join-Path 'shared_data' ("recalcul-candidat-" + [guid]::NewGuid().ToString('N'))
 & './.venv/Scripts/python.exe' "$bundle/evaluation/recalculer.py" --output "$tables"
 ```
 
-## Reproduction sur Windows
+## Historique de reproduction V2 sur Windows
 
 Exécuter depuis la racine de `hala` avec Docker Desktop en conteneurs Linux. Le service `bronze` du profil `jobs` soumet ici des jobs ponctuels via `TRENDCAST_JOB`. Lancer ces commandes lorsque le NameNode est déjà initialisé, ou lors d’un premier démarrage explicitement autorisé sur un volume neuf et vide.
 
@@ -132,7 +131,7 @@ Pour refaire les figures, exporter le profil entier ainsi que `manifest/` et `te
 python analytics/ml/plot_report.py --profile .trendcast/export/profile --model-results .trendcast/export/model --output .trendcast/export/figures
 ```
 
-## Évaluation future du modèle figé
+## Évaluation séparée de la V2 figée
 
 Fournir à la préparation (`--input`, `--start`, `--end`) un futur instantané Wikimedia vérifié, avec les mêmes pages et la même définition des vues. Inclure au moins 28 jours de contexte avant la première date de référence évaluée. Produire un dataset supervisé sous un nouvel identifiant, avec le délai de deux jours et l’empreinte de l’instantané. Passer sa racine comme `$newDataset`.
 
@@ -143,7 +142,9 @@ docker compose --profile jobs run --rm --no-deps -T -e TRENDCAST_JOB=train_model
 
 `--after` est une borne exclusive. Utiliser une date plus tardive si des observations postérieures ont déjà influencé de nouveaux choix. Le job compare le modèle sauvegardé aux deux baselines et affiche `WIKIMEDIA_FROZEN_EVALUATION`, sans réajustement. Cette évaluation reproduit le délai simulé de Gold. Pour mesurer la couverture réelle du service, conserver aussi les prévisions émises à l’heure de décision et les réceptions `available_at`, puis les rapprocher des labels après disponibilité.
 
-## Contrat de passation à Nadir
+## Contrat historique de la V2 autonome
+
+Le parcours d’intégration final est décrit dans [la passation J−1/J−2](PASSATION_CANDIDAT_J1.md). Les commandes suivantes documentent la V2 autonome, toujours utilisée pour les prévisions officielles pendant la validation du candidat.
 
 Importer `load_forecaster` et `forecast_for_reference` depuis `analytics.ml.predict_sample`. Fournir la session Spark en UTC, le modèle et son manifeste chargés une seule fois par processus, la date de référence de type Python `date` et, pour un lot, l’historique suivant.
 
@@ -157,7 +158,7 @@ Importer `load_forecaster` et `forecast_for_reference` depuis `analytics.ml.pred
 
 Conserver jusqu’à 28 jours d’historique. Les pages hors panel, les pages sans historique éligible et les scores non finis ne produisent pas de ligne. Les observations tardives peuvent alimenter les prévisions ultérieures. Elles n’entrent pas dans une prédiction déjà émise. Le paramètre optionnel `prediction_timestamp` doit être horodaté avec fuseau horaire. Le module refuse une décision à l’échéance UTC ou après. Conserver l’heure de décision réelle.
 
-La sortie est `project:string`, `page_title:string`, `prediction_date:date`, `predicted_views:double`, `model_version:string` et `prediction_timestamp:timestamp`. L’ordre exact du vecteur est dans `selected.features` du manifeste. En cas de jour manquant, le module temporel recherche l’observation précédente dans la fenêtre éligible. Le pipeline actif assemble les quatre variables sans imputation apprise.
+La sortie est `project:string`, `page_title:string`, `prediction_date:date`, `predicted_views:double`, `model_version:string` et `prediction_timestamp:timestamp`. L’ordre exact du vecteur est dans `selected.features` du manifeste. La V2 autonome recherche l’observation précédente dans sa fenêtre éligible. Le candidat applique au préalable les routes strictes J−1 et J−2. Le pipeline V2 assemble les quatre variables sans imputation apprise.
 
 ```python
 from analytics.ml.predict_sample import forecast_for_reference, load_forecaster
@@ -183,6 +184,6 @@ Pour transférer le modèle, un membre de l’équipe peut exporter le répertoi
 - **Pourquoi couper sur la date cible ?** Cela attribue chaque jour à un seul groupe et empêche qu’un label du début de validation soit utilisé en entraînement.
 - **Pourquoi deux baselines ?** La persistance mesure la valeur de la dernière observation et l’hebdomadaire mesure une saisonnalité simple. Elles donnent des références concrètes aux quatre techniques Spark ML.
 - **Pourquoi expliquer MAE et RMSE ensemble ?** La MAE représente l’erreur absolue moyenne. La RMSE donne davantage de poids aux grosses erreurs, par exemple un pic de visites.
-- **Pourquoi retenir l’arbre v2 alors que le mélange obtient une meilleure moyenne ?** Le mélange hebdomadaire améliore une fenêtre sur trois face à la configuration v1 réajustée. L’arbre en améliore deux et franchit tous les seuils de stabilité fixés avant la comparaison rétrospective.
+- **Pourquoi deux modèles et un classement distinct ?** J−1 apporte des informations plus fraîches lorsque le reçu est admissible. La V2 fournit une continuité à J−2. La forêt améliore l’erreur de volume et la persistance obtient le meilleur classement sur les mêmes fenêtres historiques.
 - **Pourquoi séparer le module temporel du pipeline sauvegardé ?** Les features nécessitent un historique daté et ses réceptions. Le modèle sauvegarde ensuite les transformations apprises et la régression.
 - **Un bon score permet-il de prédire un nouveau titre ?** L’évaluation suit les mêmes 20 séries au fil du temps. L’admission de nouveaux titres demanderait de mesurer leur couverture et de refaire un test correspondant à cet objectif.

@@ -20,6 +20,8 @@ Les cellules de modèles et baselines sont des F1 macro. La forêt seule gagne f
 
 ## Populations et calculs
 
+Les trois fenêtres chronologiques totalisent **126 jours** et **2 520 observations** sur 20 pages. Les quatre familles Spark ML comparées étaient la régression linéaire, l’arbre de décision, la forêt aléatoire et les arbres à gradient boosté. Le protocole a considéré **40 variables candidates**, soit les quatre variables de base et les 36 variables des cinq groupes d’enrichissement. Les pipelines finaux utilisent dans l’ordre `latest_views`, `latest_age`, `weekday_sin`, `weekday_cos`. La cible scientifique est `target_next_day_views`.
+
 La consolidation réutilise les prévisions Spark sauvegardées, sans nouvel ajustement. Le Gold de 462 056 lignes est filtré sur 20 pages `en.wikipedia` et 366 jours, du 23 novembre 2025 au 23 novembre 2026. On obtient 7 320 observations (20 × 366) et 7 260 cibles supervisées. Quarante références des deux premiers jours manquent d’historique à J−2 et vingt références du dernier jour manquent de cible. Les trois fenêtres externes ont 840 clés chacune. Les 1 100 clés rétrospectives ont déjà été examinées. Ces périodes n’apportent pas de nouveau test indépendant. Le label q est utilisable à partir de q+2 à 00:00 UTC, avec un cutoff train strict.
 
 Pour les évaluations historiques, la décision est J à 23:59:59 UTC et q est J+1. La médiane de référence est calculée sur les reçus admissibles de [J−28, J−2]. Le score est (valeur − médiane)/max(1, médiane). La valeur est le futur volume réalisé pour les classes de référence, le volume prédit pour la direction et les dernières vues admissibles pour le classement de persistance. Les classes ont une bande stable fermée de ±10 %. Precision@5, NDCG@5 et Spearman sont des moyennes par date éligible avec gestion des ex æquo. NDCG pondère la croissance positive réalisée. La couverture est la proportion de vues prévues sur le panel demandé. Le MASE utilise le dénominateur saisonnier à sept jours propre à chaque page, calculé sur son train dans chaque pli.
@@ -40,6 +42,8 @@ Avec toutes les J−1 simulées, la MAE de la forêt baisse de **24,46 % face à
 Les tableaux exhaustifs dont `mesures/comparaison-fenetres.csv` et `mesures/comparaison-retrospective.csv` regroupent les métriques demandées par fenêtre, âge et modèle, avec les six configurations de volume reprises à chaque âge et les expériences A/B/C à J−1. Les P95 des erreurs absolues et les biais y sont exprimés en vues. Les volumes de B proviennent de la forêt, tandis que sa direction et son rang proviennent de la logistique. Les valeurs de C correspondent au score relatif reconverti en vues.
 
 ## Disponibilité simulée
+
+La [démonstration du 23 novembre 2026](DEMONSTRATION.md) exécute une seule journée réelle du Gold avec disponibilité J−1 simulée sur les 20 pages. Les métriques journalières sont évaluées après matérialisation des prévisions et décrites séparément dans la procédure de démonstration.
 
 | Réceptions au moment de la décision | n prévu / demandé | MAE | RMSE | MASE | F1 macro | P@5 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |

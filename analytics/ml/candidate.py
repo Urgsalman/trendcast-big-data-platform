@@ -1,6 +1,8 @@
 """Politique candidate Wikimedia J+1, avec une décision UTC par lot."""
 
-from datetime import timedelta, timezone
+import argparse
+import math
+from datetime import datetime, timedelta, timezone
 
 from pyspark.ml import PipelineModel
 from pyspark.sql import Window
@@ -20,7 +22,14 @@ from analytics.ml.features import (
     valid_observation,
 )
 from analytics.ml.predict_sample import OUTPUT_COLUMNS
-from analytics.ml.runtime import KEY, SERIES, read_manifest
+from analytics.ml.runtime import (
+    GOLD_ROOT,
+    KEY,
+    SERIES,
+    print_manifest,
+    read_manifest,
+    start_spark,
+)
 from analytics.ml.train_models import prediction_with_recipe
 
 OUTPUT_EXTENSIONS = (
@@ -39,6 +48,43 @@ PIPELINES = {
     1: ("pipelines/j1_log", "log1p", "RandomForestRegressionModel"),
     2: ("pipelines/j2_v2", "raw", "DecisionTreeRegressionModel"),
 }
+POLICY_VERSION = "hala-j1-20261126-v1"
+REPLAY_CUTOFF = datetime(2026, 11, 22, 23, 59, 59, tzinfo=timezone.utc)
+DEMO_FIELDS = (
+    *DECISION_KEY,
+    "latest_observation_date",
+    *CORE_FEATURES,
+    "actual_views",
+    "predicted_views",
+    "absolute_error",
+    "historical_reference",
+    "trend_direction",
+    "trend_score",
+    "trend_rank",
+    "model_version",
+    "route",
+)
+
+
+class ModelPackageMissing(FileNotFoundError):
+    """Le paquet nécessaire à l'inférence n'est pas installé."""
+
+
+def check_package_files(spark, root):
+    path_type = spark._jvm.org.apache.hadoop.fs.Path
+    configuration = spark.sparkContext._jsc.hadoopConfiguration()
+    required = ["manifest", *(f"{path}/metadata" for path, _, _ in PIPELINES.values())]
+    for name in required:
+        path = path_type(f"{root}/{name}")
+        if not path.getFileSystem(configuration).exists(path):
+            raise ModelPackageMissing(
+                f"Paquet {POLICY_VERSION} absent ou incomplet à {root} (manque {name}).\n"
+                "Depuis la racine de hala, exécuter :\n"
+                "  .\\analytics\\ml\\install_final_model.ps1\n"
+                "Installation et transfert du ZIP : "
+                "https://github.com/Urgsalman/trendcast-big-data-platform/blob/hala/"
+                "analytics/ml/PASSATION_CANDIDAT_J1.md#installation-des-modèles"
+            )
 
 
 def validate_manifest(manifest):
@@ -46,7 +92,7 @@ def validate_manifest(manifest):
     rules = manifest["decision"]
     if (
         manifest["schema_version"] != 1
-        or not manifest["policy_version"]
+        or manifest["policy_version"] != POLICY_VERSION
         or not panel["project"]
         or not panel["pages"]
         or len(set(panel["pages"])) != len(panel["pages"])
@@ -96,6 +142,7 @@ class WikimediaCandidate:
     @classmethod
     def load(cls, spark, uri):
         root = uri.rstrip("/")
+        check_package_files(spark, root)
         manifest = read_manifest(spark, f"{root}/manifest")
         validate_manifest(manifest)
         pipelines = {}
@@ -230,6 +277,7 @@ class WikimediaCandidate:
             .select(
                 *OUTPUT_COLUMNS,
                 *OUTPUT_EXTENSIONS,
+                *CORE_FEATURES,
                 "policy_version",
                 "route",
                 "abstention_reason",
@@ -240,3 +288,187 @@ class WikimediaCandidate:
                 "j2_available_at",
             )
         )
+
+
+def replay_all_j1(spark, policy, gold_uri, cutoff):
+    """Simuler des reçus et évaluer des prévisions déjà matérialisées."""
+    panel = policy.manifest["panel"]
+    gold = select_panel(spark.read.parquet(gold_uri), panel["project"], panel["pages"])
+    reference = cutoff.date()
+    target = reference + timedelta(days=1)
+    past = gold.where(
+        F.col("event_date").between(
+            reference - timedelta(days=HISTORY_DAYS), reference - timedelta(days=1)
+        )
+    ).select(
+        *HISTORY_SCHEMA,
+        F.date_add("event_date", 1).cast("timestamp").alias("available_at"),
+    )
+    decision = policy.evaluate(past, cutoff)
+    # Couper la lignée Spark avant que les labels ne soient introduits.
+    predictions = decision.collect()
+    if any(row.route != "J-1" for row in predictions):
+        raise ValueError(
+            "Le Gold ne couvre pas les observations de J−1 requises pour ce replay."
+        )
+    labels = canonical_observations(
+        key_statistics(gold.where(F.col("event_date") == target))
+    ).select(
+        *SERIES,
+        F.col("event_date").alias("prediction_date"),
+        F.col("views").alias("actual_views"),
+    )
+    evaluated = (
+        spark.createDataFrame(predictions, decision.schema)
+        .join(labels, list(DECISION_KEY), "left")
+        .withColumn(
+            "absolute_error", F.abs(F.col("predicted_views") - F.col("actual_views"))
+        )
+    )
+    report = evaluated.select(*DEMO_FIELDS).orderBy(*SERIES).collect()
+    if len(report) != len(panel["pages"]) or any(
+        row.actual_views is None for row in report
+    ):
+        raise ValueError(
+            "Une ou plusieurs valeurs Gold de J+1 sont absentes ou conflictuelles."
+        )
+    return report
+
+
+def daily_metrics(rows):
+    errors = [row.predicted_views - row.actual_views for row in rows]
+    actual_sum = sum(row.actual_views for row in rows)
+    mean_actual = actual_sum / len(rows)
+    abs_total = sum(abs(error) for error in errors)
+    squared = sum(error**2 for error in errors)
+    variation = sum((row.actual_views - mean_actual) ** 2 for row in rows)
+    return {
+        "n": len(rows),
+        "mae": abs_total / len(rows),
+        "rmse": math.sqrt(squared / len(rows)),
+        "r2": 1 - squared / variation if variation else None,
+        "wape": abs_total / actual_sum if actual_sum else None,
+        "bias": sum(errors) / len(rows),
+    }
+
+
+def show_robustness(spark, policy, package, cutoff):
+    schema = T.StructType(
+        [T.StructField(name, dtype) for name, dtype in OBSERVATION_SCHEMA.items()]
+    )
+    history = (
+        spark.read.schema(schema)
+        .option("header", True)
+        .option("mode", "FAILFAST")
+        .csv(f"{package}/replay/receipts.csv")
+    )
+    decisions = policy.evaluate(history, cutoff).persist()
+    try:
+        decisions.groupBy("route").count().orderBy("route").show()
+        decisions.select(
+            "page_title",
+            "prediction_date",
+            "latest_observation_date",
+            "route",
+            "predicted_views",
+            "trend_direction",
+            "trend_rank",
+            "abstention_reason",
+        ).orderBy("route", "trend_rank", "page_title").show(
+            len(policy.manifest["panel"]["pages"]), truncate=False
+        )
+    finally:
+        decisions.unpersist()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Démonstration du replay historique avec disponibilités simulées."
+    )
+    parser.add_argument(
+        "--package", required=True, help="Racine HDFS du paquet candidat"
+    )
+    parser.add_argument(
+        "--decision-utc",
+        required=True,
+        help="Instant ISO 8601 du replay, avec fuseau UTC",
+    )
+    parser.add_argument(
+        "--scenario", choices=("full-j1", "robustness"), default="full-j1"
+    )
+    parser.add_argument(
+        "--gold", default=f"{GOLD_ROOT}/ml_dataset", help="URI du Gold Wikimedia"
+    )
+    args = parser.parse_args()
+    try:
+        cutoff = datetime.fromisoformat(args.decision_utc.replace("Z", "+00:00"))
+        if cutoff.utcoffset() != timedelta(0):
+            raise ValueError
+    except ValueError:
+        parser.error("--decision-utc doit être un instant ISO 8601 en UTC")
+    if cutoff != REPLAY_CUTOFF:
+        parser.error("Le replay publié utilise la décision 2026-11-22T23:59:59Z")
+
+    spark = start_spark("TrendCast - démonstration historique J+1")
+    try:
+        package = args.package.rstrip("/")
+        policy = WikimediaCandidate.load(spark, package)
+        print_manifest(
+            "TRENDCAST_REPLAY",
+            {
+                "availability": "simulated_historical_replay",
+                "scenario": args.scenario,
+                "policy": policy.manifest["policy_version"],
+                "decision_utc": cutoff.isoformat(),
+                "target": cutoff.date() + timedelta(days=1),
+            },
+        )
+        for age, pipeline in policy.pipelines.items():
+            estimator = pipeline.stages[-1]
+            print_manifest(
+                "TRENDCAST_MODEL",
+                {
+                    "age_days": age,
+                    "version": policy.manifest["routes"][str(age)]["model_version"],
+                    "estimator": type(estimator).__name__,
+                    "parameters": {
+                        param.name: value
+                        for param, value in estimator.extractParamMap().items()
+                    },
+                },
+            )
+        if args.scenario == "robustness":
+            show_robustness(spark, policy, package, cutoff)
+        else:
+            rows = replay_all_j1(spark, policy, args.gold, cutoff)
+            n = len(rows)
+            display = spark.createDataFrame(rows, list(DEMO_FIELDS)).orderBy(*SERIES)
+            display.select(
+                *DECISION_KEY, "latest_observation_date", *CORE_FEATURES
+            ).show(n, truncate=False)
+            display.select(
+                "page_title",
+                "actual_views",
+                "predicted_views",
+                "absolute_error",
+                "historical_reference",
+                "trend_direction",
+                "trend_score",
+                "trend_rank",
+                "model_version",
+                "route",
+            ).show(n, truncate=False)
+            print_manifest(
+                "TRENDCAST_ROUTES",
+                {"requested": n, "J-1": n, "J-2": 0, "abstention": 0, "coverage": 1.0},
+            )
+            print_manifest("TRENDCAST_DAILY_METRICS", daily_metrics(rows))
+            print_manifest("TRENDCAST_PREDICTIONS", [row.asDict() for row in rows])
+    except ModelPackageMissing as error:
+        parser.exit(2, f"{error}\n")
+    finally:
+        spark.stop()
+
+
+if __name__ == "__main__":
+    main()

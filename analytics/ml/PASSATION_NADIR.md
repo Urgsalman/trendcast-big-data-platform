@@ -1,4 +1,6 @@
-# Passation à Nadir · Prévision Wikimedia
+# Passation historique à Nadir · V2 autonome
+
+La V2 sert toujours les prévisions officielles de Nadir pendant la validation en parallèle. La version finale pour la soutenance et la future intégration est `hala-j1-20261126-v1`, dont la route de secours recharge cet arbre V2. [Passation J−1/J−2](PASSATION_CANDIDAT_J1.md) · [Démonstration](DEMONSTRATION.md)
 
 ## Modèle et résultats
 

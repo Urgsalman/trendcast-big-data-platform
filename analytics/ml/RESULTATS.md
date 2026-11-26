@@ -1,4 +1,6 @@
-# Résultats expérimentaux · Wikimedia
+# Résultats historiques · Wikimedia V1 et V2
+
+Ce rapport conserve la préparation et les mesures de la V1 et de la V2. L’arbre V2 sert de secours dans la version finale J−1/J−2. [Résultats du candidat final](RESULTATS_CANDIDAT_J1.md)
 
 La première livraison `hala-20261125-v1` et l’optimisation `hala-20261125-v2` utilisent le même export Gold transmis par Soulaimane. Le profilage utilise le corpus complet. L’entraînement et l’évaluation portent sur les 20 pages technologiques approuvées, du 23 novembre 2025 au 23 novembre 2026 inclus. Les commandes, hypothèses et types d’entrée figurent dans le [guide de reproduction et d’inférence](README.md).
 

@@ -2,45 +2,29 @@
 
 La politique `hala-j1-20261126-v1` calcule les vues de J+1 sur les 20 pages `en.wikipedia`. À J−1, elle utilise la forêt logarithmique. À J−2, elle utilise une copie de l’arbre V2. Chaque route déduit la direction de sa propre prévision de vues. Le classement est une **baseline statistique de persistance**, normalisée par une médiane commune aux routes. La validation en parallèle est décrite dans [VALIDATION_CANDIDAT_J1.md](VALIDATION_CANDIDAT_J1.md).
 
-## Fichiers et importation HDFS
+`candidate.py` est le point d’entrée pour la [démonstration](DEMONSTRATION.md) et le module à importer pour la future intégration.
 
-Le ZIP `TrendCast_Hala_ML_Candidate_hala-j1-20261126-v1.zip` contient le manifeste d’inférence et deux pipelines Spark complets sous `hala-j1-20261126-v1/`. Il cible Spark 3.5.7, Scala 2.12, Java 17 et l’image TrendCast Python 3.10 avec NumPy 1.26.4. Le commit de base des modules partagés est `a2036d69e65d739e1a05bc1813c86271420e5fa3`. La branche `hala` contient le module candidat et son test. Le ZIP en contient aussi une copie sous `code/analytics/ml/`. Le montage du dossier `analytics/` en lecture seule permet au driver d’utiliser le code de la branche. Les workers utilisent l’image Spark existante.
+## Installation des modèles
 
-Vérifier d’abord le SHA-256 avec le fichier compagnon `.zip.sha256`. Exécuter depuis la racine Docker Compose sous PowerShell. Adapter `$zip` au chemin du fichier reçu.
+Le ZIP `TrendCast_Hala_ML_Final_hala-j1-20261126-r2.zip` contient le manifeste, les deux pipelines Spark et les références de replay et d’évaluation. La politique reste `hala-j1-20261126-v1`. Le driver utilise Spark 3.5.7, Scala 2.12, Java 17, Python 3.10 et NumPy 1.26.4 dans l’image TrendCast. Exécuter le script depuis un clone de `hala`, sous PowerShell 7 avec le NameNode Docker démarré.
+
+Placer le ZIP et son fichier compagnon `.zip.sha256` dans le même dossier. Depuis la racine du clone, utiliser le chemin local.
 
 ```powershell
-$zip = (Resolve-Path './TrendCast_Hala_ML_Candidate_hala-j1-20261126-v1.zip').Path
-$expected = ((Get-Content -LiteralPath "$zip.sha256" -Raw).Trim() -split '\s+')[0]
-if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ne $expected) {
-    throw 'Empreinte de l’archive invalide'
-}
-$id = [guid]::NewGuid().ToString('N')
-$extract = Join-Path (Get-Location) "trendcast-candidat-$id"
-Expand-Archive -LiteralPath $zip -DestinationPath $extract
-$bundle = Join-Path $extract 'hala-j1-20261126-v1'
-Get-Content -LiteralPath (Join-Path $bundle 'SHA256SUMS.txt') | ForEach-Object {
-    $checksum, $file = $_ -split '  ', 2
-    if ((Get-FileHash -LiteralPath (Join-Path $bundle $file) -Algorithm SHA256).Hash -ne $checksum) {
-        throw "Empreinte invalide pour $file"
-    }
-}
-
-$stage = "/tmp/trendcast-candidat-$id"
-$target = '/trendcast/models/wikimedia_next_day_views/candidates/hala-j1-20261126-v1'
-docker compose exec -T namenode mkdir "$stage"
-if ($LASTEXITCODE -ne 0) { throw 'Création du dossier temporaire en échec' }
-docker compose cp "${bundle}/." "namenode:$stage"
-if ($LASTEXITCODE -ne 0) { throw 'Copie Docker en échec' }
-docker compose exec -T namenode bash -c 'if hdfs dfs -test -e "$2"; then exit 3; fi; hdfs dfs -mkdir -p "$(dirname "$2")" && hdfs dfs -put "$1" "$2"' release "$stage" "$target"
-if ($LASTEXITCODE -ne 0) { throw 'Import HDFS en échec ou destination déjà présente' }
-docker compose exec -T namenode hdfs dfs -ls "$target/pipelines"
+& './analytics/ml/install_final_model.ps1' -ArchivePath './shared_data/delivery/TrendCast_Hala_ML_Final_hala-j1-20261126-r2.zip'
 ```
 
-| Route | Répertoire sous `$target` | Règle de restitution |
+Une fois la [release `hala-ml-j1-20261126-r2`](https://github.com/Urgsalman/trendcast-big-data-platform/releases/tag/hala-ml-j1-20261126-r2) publiée, les membres authentifiés avec `gh auth login` peuvent passer `-FromRelease` à la place de `-ArchivePath`. L’accès à un dépôt privé dépend des permissions GitHub du membre.
+
+Le script vérifie les empreintes et la réplication effective, puis installe le contenu au chemin `/trendcast/models/wikimedia_next_day_views/candidates/hala-j1-20261126-v1`. Si ce contenu est déjà identique, il affiche `reused`. Un contenu différent arrête l’installation avec le chemin concerné. Le transfert temporaire utilise un renommage WebHDFS sans écrasement.
+
+| Route | Répertoire sous le paquet | Règle de restitution |
 | --- | --- | --- |
 | J−1 | `pipelines/j1_log` | `max(0, expm1(z))` |
 | J−2 | `pipelines/j2_v2` | Cible brute avec plancher à 0, recette V2 du manifeste |
 | Les deux | `manifest/part-00000` | Panel, ordre des variables, transformations, poids et politique |
+
+`replay/receipts.csv` et `replay/expected.csv` servent au scénario secondaire et au test Spark. Le scénario principal lit le Gold officiel du cluster.
 
 Le vecteur est `latest_views`, `latest_age`, `weekday_sin`, `weekday_cos`, dans cet ordre. L’âge est relatif à J en UTC et le jour de semaine est celui de la **cible**. Le candidat réutilise le calcul de features de la V2. Les deux pipelines se chargent une fois à l’initialisation du driver.
 
@@ -55,6 +39,8 @@ Le vecteur est `latest_views`, `latest_age`, `weekday_sin`, `weekday_cos`, dans 
 | `available_at` | TIMESTAMP | Premier instant UTC où cette version du total est validée et durablement lisible par la prévision. |
 
 L’historique doit donner les différentes versions par clé projet, page, date. Conserver le premier instant de disponibilité de chaque version, puis relier la provenance aux coordonnées Kafka et à l’horodatage de persistance. Le jour d’événement et le timestamp Kafka d’un rattrapage ne fournissent pas cet instant. Le candidat exige la clôture UTC du jour de l’observation et `available_at < prediction_timestamp`. Il lit les dates [J−28, J−1] à la décision située en J et prévoit q = J+1. Conserver l’instant de décision d’origine lors d’un rejeu.
+
+Deux adaptations peuvent établir une provenance. Avec un flux instrumenté, journaliser le premier commit durable de chaque version lisible par le service d’inférence. Avec un export par lot, figer un instantané immuable **avant** la décision, valider son schéma et son contenu, puis journaliser son identifiant, son empreinte et l’heure UTC où le service l’a lu et a confirmé sa disponibilité. Cette heure établit une borne prudente pour les seules versions présentes dans l’instantané. Elle permet de renseigner leur première disponibilité prouvée sans reconstituer un reçu historique. Conserver les premières preuves lorsqu’une version figure dans plusieurs instantanés. Un instantané confirmé à la coupure ou après ne sert qu’aux décisions suivantes. Le Gold historique actuel reste une source de valeurs du replay avec réceptions simulées.
 
 Filtrer les versions à la coupure avant déduplication. Les doublons de même total se réduisent à une valeur et à son premier reçu. Les versions déjà reçues avec des totaux divergents excluent la clé. Une correction reçue à la coupure ou après pourra apparaître à une décision ultérieure. Le dernier jour exact admissible dirige la route, J−1 puis J−2. Au-delà, le journal indique `no_admissible_j1_or_j2`, `no_admissible_history` ou `conflicting_recent_receipts`. Une sortie du modèle non finie entraîne `invalid_model_prediction`. Les abstentions sont présentes dans le journal et absentes des sorties publiables.
 

@@ -1,5 +1,7 @@
 # Validation en parallèle avant activation de J−1
 
+Les scénarios de soutenance contrôlent l’inférence hors ligne avec des disponibilités simulées. Le protocole ci-dessous s’applique ensuite à l’intégration avec Nadir, sur des observations dont la disponibilité a été mesurée en direct. [Démonstration](DEMONSTRATION.md)
+
 La disponibilité simulée sur Gold mesure l’effet possible de la fraîcheur. Le premier reçu durable côté inférence doit être observé en direct. Les timestamps Kafka du backfill reflètent des imports groupés. Les prévisions officielles continuent d’être servies par la V2 pendant la validation candidate.
 
 ## Préparation
