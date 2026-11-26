@@ -8,6 +8,8 @@ Le seul modèle actif pour la passation est l’arbre de décision `hala-2026112
 
 [Passation à Nadir, import et contrôle de l’archive du modèle](PASSATION_NADIR.md)
 
+Le candidat J−1/J−2 fait l’objet d’une validation en parallèle. [Résultats scientifiques](RESULTATS_CANDIDAT_J1.md) · [Contrat candidat pour Nadir](PASSATION_CANDIDAT_J1.md) · [Critères d’activation](VALIDATION_CANDIDAT_J1.md)
+
 ```mermaid
 flowchart LR
     Gold[(Exports Gold en HDFS)] --> Profile[Profilage Spark SQL]
@@ -49,6 +51,41 @@ Le profilage couvre les 462 056 observations et 56 758 pages de Gold Wikimed
 | Modèles | `LinearRegression`, `DecisionTreeRegressor`, `RandomForestRegressor` et `GBTRegressor`. L’expérience comprend des cibles brute, logarithmique et résiduelle, ainsi que des pondérations avec les baselines. |
 | Sélection | Moyenne, sur trois fenêtres, des ratios MAE et RMSE à l’arbre v1 réajusté. Les seuils de promotion prennent aussi en compte la stabilité et le dépassement des références. L’arbre v2 est ensuite réajusté sur les labels disponibles au début de la période rétrospective. |
 | Prédictions | Les scores négatifs finis sont ramenés à zéro pour respecter l’unité. La même fonction est utilisée en évaluation et à l’inférence. Une valeur non finie reste nulle et provoque l’échec du contrôle d’évaluation. |
+
+## Reproduction du candidat J1
+
+Cloner `hala` et obtenir auprès de Hala le ZIP candidat et le fichier compagnon `.zip.sha256`. Les dépendances Python du test Spark sont dans l’image TrendCast. Installer pytest, Ruff et les dépendances d’ingestion pour les tests du dépôt. NumPy et pandas servent au recalcul scientifique local.
+
+```powershell
+git clone --branch hala --single-branch https://github.com/Urgsalman/trendcast-big-data-platform.git
+Set-Location trendcast-big-data-platform
+py -3.13 -m venv .venv
+& './.venv/Scripts/python.exe' -m pip install -r ingestion/requirements-automation.txt numpy==2.5.5 pandas==3.1.1
+& './.venv/Scripts/python.exe' -m pytest -q --tb=short -p no:cacheprovider
+& './.venv/Scripts/ruff.exe' check --no-cache analytics/ml
+& './.venv/Scripts/ruff.exe' format --check --no-cache analytics/ml
+```
+
+Préparer les conteneurs Linux Spark et HDFS avec les commandes de construction et de démarrage de la section Windows ci-dessous, jusqu’au contrôle des workers. Puis [vérifier et importer le ZIP](PASSATION_CANDIDAT_J1.md#fichiers-et-importation-hdfs). Le candidat utilise le manifeste, les deux modèles et le replay du ZIP. Lancer le test distribué depuis la racine du clone.
+
+```powershell
+$analytics = (Resolve-Path 'analytics').Path
+$package = 'hdfs://namenode:9000/trendcast/models/wikimedia_next_day_views/candidates/hala-j1-20261126-v1'
+$run = [guid]::NewGuid().ToString('N')
+$check = "hdfs://namenode:9000/trendcast/analytics/wikimedia_ml_checks/candidate-$run"
+docker compose exec -T namenode hdfs dfs -mkdir -p /trendcast/analytics/wikimedia_ml_checks
+$bash = 'export PYTHONDONTWRITEBYTECODE=1 HADOOP_USER_NAME=hadoop; ip="$(hostname -i)"; exec /opt/spark/bin/spark-submit --master spark://spark-master:7077 --driver-memory 768m --executor-memory 512m --conf "spark.driver.host=$ip" --conf spark.driver.bindAddress=0.0.0.0 --conf spark.executor.cores=1 --conf spark.cores.max=2 --conf spark.sql.shuffle.partitions=3 /opt/trendcast/analytics/ml/tests/check_candidate.py --package "$1" --output "$2"'
+docker compose --profile jobs run --pull never --rm --no-deps -T -v "${analytics}:/opt/trendcast/analytics:ro" --entrypoint /bin/bash bronze -c $bash candidate "$package" "$check"
+```
+
+La sortie `CANDIDATE_VERIFIED` contrôle les 20 décisions, les 15 prévisions, les abstentions et la parité des deux microlots. Le [contrat candidat](PASSATION_CANDIDAT_J1.md#chargement-et-exemple-gold) montre comment charger les pipelines, produire une prévision J+1 et lire le journal des routes.
+
+Pour reproduire les sept tableaux, utiliser le répertoire `$bundle` créé par la procédure d’extraction du ZIP. Le script recalcule les métriques à partir des 3 620 clés de prédictions, labels et références figées. Il vérifie les résultats numériques contre les CSV livrés. Les données de référence sont dans le ZIP local, hors Git.
+
+```powershell
+$tables = Join-Path (Get-Location) "recalcul-candidat-$([guid]::NewGuid().ToString('N'))"
+& './.venv/Scripts/python.exe' "$bundle/evaluation/recalculer.py" --output "$tables"
+```
 
 ## Reproduction sur Windows
 
