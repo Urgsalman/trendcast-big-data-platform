@@ -57,6 +57,7 @@ find . -type d -printf '%P\n' | sed '/^$/d' | LC_ALL=C sort > "$2.dirs"
 LC_ALL=C sort "$4" > "$2.expected-dirs"
 cmp "$2.dirs" "$2.expected-dirs"
 '@
+    $check = $check.Replace("`r`n", "`n")
     Invoke-NameNode @('bash', '-c', $check, 'integrite', $HdfsPath, "$nodeTemp/$Label", "$nodeTemp/runtime.sha256", "$nodeTemp/runtime.dirs") | Out-Null
 }
 
