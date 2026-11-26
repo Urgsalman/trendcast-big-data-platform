@@ -13,6 +13,8 @@ Projet académique des modules **Big Data Plateformes** et **Big Data Analytics*
 > [!IMPORTANT]
 > La V2 sauvegardée a été chargée sur Spark distribué et a produit 20 prévisions en replay historique. La politique J−1 reste expérimentale. La voie chaude Kafka, la base de restitution et le dashboard restent à intégrer.
 
+Ce guide décrit la branche `integration/pre-presentation`, qui intègre le travail de Hala jusqu’à `7cb024b`. Le commit ultérieur `7281b6e` sur `hala` apporte un installateur et une démonstration J−1 dédiés. Cette livraison fait l’objet d’un guide séparé et n’a pas été intégrée ni validée sur cette branche. [Démonstration J−1 de Hala](https://github.com/Urgsalman/trendcast-big-data-platform/blob/7281b6ef42a5c20f2fb45e303d9cc38ce2e4a789/analytics/ml/DEMONSTRATION.md)
+
 ## Sommaire
 
 - [Architecture globale](#architecture-globale) · [Cluster Docker](#cluster-docker)
