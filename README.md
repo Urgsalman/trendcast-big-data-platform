@@ -2,7 +2,7 @@
 
 TrendCast collecte des signaux d’intérêt issus de Wikimedia, Hacker News et Google Trends. Il les archive sur HDFS, calcule des indicateurs historiques et expérimente la prévision des vues Wikipédia du lendemain sur un panel de 20 pages technologiques.
 
-**État de l’intégration · 26 novembre 2026.** La branche rassemble les travaux de Soulaimane, Zakaria et Hala. La validation sur le cluster de démonstration et le rechargement de la V2 restent à effectuer. La voie chaude Kafka, la base de restitution et le dashboard restent à intégrer.
+**État de l’intégration · 26 novembre 2026.** La branche rassemble les travaux de Soulaimane, Zakaria et Hala. La V2 a été rechargée depuis HDFS et a produit 20 prévisions en replay historique sur Spark distribué. La voie chaude Kafka, la base de restitution et le dashboard restent à intégrer.
 
 ## Architecture et fichiers
 
@@ -76,16 +76,17 @@ docker compose --profile jobs run --rm --no-deps -T -e TRENDCAST_JOB=silver_qual
 docker compose --profile jobs run --rm --no-deps -T -e TRENDCAST_JOB=build_gold.py bronze
 $model = 'hdfs://namenode:9000/trendcast/models/wikimedia_next_day_views/hala-20261125-v2'
 docker compose --profile jobs run --rm --no-deps -T -e TRENDCAST_JOB=predict_sample.py bronze --model $model --load-only
+docker compose --profile jobs run --rm --no-deps -T -e TRENDCAST_JOB=predict_sample.py bronze --model $model --replay-target 2026-11-23
 ```
 
-Pour la parité V2, ajouter `--gold` et `--reference-predictions` avec les URI vérifiées des fichiers de référence, et retirer `--load-only`. Relever l’identifiant d’application Spark et les exécuteurs réellement utilisés. Pour le candidat, suivre la commande distribuée de la section [Reproduction du candidat J1](analytics/ml/README.md#reproduction-du-candidat-j1).
+Le marqueur `WIKIMEDIA_REPLAY_SIMULATED` affiche les prévisions du replay avec des dates de réception simulées. Le test de parité se lance séparément avec `--gold` et `--reference-predictions`, sans `--load-only` ni `--replay-target`. Les prédictions de référence V2 restent à obtenir. Pour le candidat, suivre la commande distribuée de la section [Reproduction du candidat J1](analytics/ml/README.md#reproduction-du-candidat-j1) après réception du ZIP binaire.
 
 ## Preuves et limites
 
 - Les tests unitaires couvrent les collecteurs avec réponses simulées, la validation, les échecs de publication simulés, la reprise du scheduler et les garde-fous Bronze. L’audit a compté 56 tests réussis. Les validations distribuées rapportées par Hala sont décrites dans les [résultats V2](analytics/ml/RESULTATS.md).
 - Le Gold local contient 462 056 lignes ML, 3 977 métriques Wikimedia et deux lignes pour chacune des autres sources. Les données combinent un top quotidien Wikipedia et un panel API. Les sources et leurs règles de mesure diffèrent.
 - Sur 1 100 clés rétrospectives, les baselines recalculées donnent 2 823,81 / 12 762,44 pour la persistance et 2 141,94 / 10 636,73 pour l’hebdomadaire, en MAE/RMSE. La V2 rapporte 2 084,00 / 9 310,54 sur cet ensemble. Les [résultats J−1](analytics/ml/RESULTATS_CANDIDAT_J1.md) supposent des réceptions simulées. Le Gold n’expose pas la première disponibilité durable `available_at`.
-- La reprise réelle Kafka–Bronze, la réplication effective des blocs, la participation des deux Workers, les jobs Silver/Gold et le rechargement local de la V2 restent à confirmer sur le cluster de présentation.
+- Le chargement V2 a alloué un exécuteur sur chacun des deux Workers. Les blocs du modèle et du Gold ML contrôlés par HDFS avaient deux répliques. La reprise Kafka–Bronze et la réexécution des jobs Silver/Gold restent à vérifier sur le cluster de présentation.
 - La reconstruction vierge dépend d’une initialisation explicite du registre et de la provenance de l’historique. Les reçus SQLite et le checkpoint Spark n’établissent aucune garantie exactly-once de bout en bout.
 
 ## Contributions

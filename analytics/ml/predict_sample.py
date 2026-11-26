@@ -2,7 +2,7 @@
 
 import argparse
 import sys
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 from pyspark.ml import PipelineModel
@@ -91,11 +91,19 @@ def forecast_for_reference(
 
 def verify_saved_model(spark, model_uri, *, gold_uri=None, reference_predictions=None):
     model, manifest = load_forecaster(spark, model_uri)
-    policy = manifest["dataset_manifest"]
     stored = spark.read.parquet(
         reference_predictions or f"{model_uri}/test_predictions"
     )
     target_day = stored.agg(F.max("prediction_date").alias("day")).first().day
+    predictions = replay_forecasts(spark, model, manifest, gold_uri, target_day)
+    expected = stored.where(F.col("prediction_date") == target_day).select(
+        *SERIES, "prediction_date", F.col("predicted_views").alias("expected")
+    )
+    verify_parity(predictions, expected, manifest, model_uri, target_day)
+
+
+def replay_forecasts(spark, model, manifest, gold_uri, target_day):
+    policy = manifest["dataset_manifest"]
     reference = target_day - timedelta(days=1)
     gold = spark.read.parquet(gold_uri or policy["gold"]).where(
         F.col("event_date").between(policy["first_input_day"], policy["last_input_day"])
@@ -108,12 +116,12 @@ def verify_saved_model(spark, model_uri, *, gold_uri=None, reference_predictions
     submitted = datetime.combine(target_day, time.min, timezone.utc) - timedelta(
         seconds=1
     )
-    predictions = forecast_for_reference(
+    return forecast_for_reference(
         spark, model, manifest, replay, reference, prediction_timestamp=submitted
     )
-    expected = stored.where(F.col("prediction_date") == target_day).select(
-        *SERIES, "prediction_date", F.col("predicted_views").alias("expected")
-    )
+
+
+def verify_parity(predictions, expected, manifest, model_uri, target_day):
     joined = predictions.join(expected, [*SERIES, "prediction_date"], "full").cache()
     try:
         valid = finite(F.col("predicted_views")) & finite(F.col("expected"))
@@ -150,7 +158,13 @@ def verify_saved_model(spark, model_uri, *, gold_uri=None, reference_predictions
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True)
-    parser.add_argument("--load-only", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--load-only", action="store_true")
+    mode.add_argument(
+        "--replay-target",
+        type=date.fromisoformat,
+        help="Date cible du replay Gold, avec disponibilité simulée",
+    )
     parser.add_argument(
         "--gold", help="Entrée Gold de référence pour le test de parité"
     )
@@ -160,6 +174,8 @@ def main():
     args = parser.parse_args()
     if args.load_only and (args.gold or args.reference_predictions):
         parser.error("--load-only ne requiert ni Gold ni prédictions de référence")
+    if args.replay_target and args.reference_predictions:
+        parser.error("--replay-target ne compare pas les prédictions de référence")
     model_uri = args.model.rstrip("/")
     spark = start_spark("TrendCast Wikimedia - rechargement et parité")
     try:
@@ -172,6 +188,24 @@ def main():
                     "model_uri": model_uri,
                     "stages": [type(stage).__name__ for stage in model.stages],
                     "features": manifest["selected"]["features"],
+                },
+            )
+        elif args.replay_target:
+            model, manifest = load_forecaster(spark, model_uri)
+            rows = (
+                replay_forecasts(spark, model, manifest, args.gold, args.replay_target)
+                .orderBy(*SERIES)
+                .collect()
+            )
+            if not rows:
+                raise RuntimeError("Aucune prévision disponible pour cette date")
+            print_manifest(
+                "WIKIMEDIA_REPLAY_SIMULATED",
+                {
+                    "model_version": manifest["version"],
+                    "target_date": args.replay_target,
+                    "forecast_count": len(rows),
+                    "forecasts": [row.asDict() for row in rows],
                 },
             )
         else:
